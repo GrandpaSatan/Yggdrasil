@@ -4766,11 +4766,14 @@ pub async fn config_sync(
 /// Parameters for the `gaming` tool.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct GamingParams {
-    /// Action: "status", "launch", "stop", "list-gpus".
+    /// Action: "status", "launch", "stop", "list-gpus", "pair".
     pub action: String,
-    /// VM name (required for launch/stop).
+    /// VM name (required for launch/stop/pair).
     #[serde(default)]
     pub vm_name: Option<String>,
+    /// 4-digit Moonlight pairing PIN (required for pair action).
+    #[serde(default)]
+    pub pin: Option<String>,
 }
 
 /// Manage cloud gaming VMs on Thor (Proxmox).
@@ -4788,7 +4791,8 @@ pub async fn gaming(
 
     let body = serde_json::json!({
         "action": params.action,
-        "vm_name": params.vm_name
+        "vm_name": params.vm_name,
+        "pin": params.pin
     });
 
     let resp = match client.post(&url).json(&body).timeout(timeout).send().await {

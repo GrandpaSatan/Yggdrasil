@@ -274,6 +274,7 @@ async fn main() -> anyhow::Result<()> {
         config,
         tool_registry,
         gaming_config,
+        skill_cache: Arc::new(odin::skill_cache::SkillCache::new()),
     };
 
     // ── Axum router ───────────────────────────────────────────────
@@ -343,7 +344,7 @@ async fn main() -> anyhow::Result<()> {
         .layer(DefaultBodyLimit::max(2 * 1024 * 1024))
         // Concurrency limit: max 64 in-flight requests to prevent resource exhaustion.
         .layer(tower::limit::ConcurrencyLimitLayer::new(64))
-        .with_state(state);
+        .with_state(state.clone());
 
     // ── TCP listener ──────────────────────────────────────────────
     let listener = tokio::net::TcpListener::bind(&listen_addr)
@@ -354,6 +355,24 @@ async fn main() -> anyhow::Result<()> {
 
     // ── Session reaper ────────────────────────────────────────────
     let _reaper_handle = session::spawn_reaper(session_store.clone());
+
+    // ── Task worker (autonomous background task execution) ──────
+    let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
+
+    if let Some(ref tw_config) = state.config.task_worker {
+        if tw_config.enabled {
+            let worker = odin::task_worker::TaskWorker::new(
+                state.clone(),
+                tw_config.clone(),
+                shutdown_tx.subscribe(),
+            );
+            tokio::spawn(worker.run());
+        } else {
+            tracing::info!("task worker disabled in config");
+        }
+    } else {
+        tracing::info!("task worker not configured");
+    }
 
     // ── systemd ready notification ────────────────────────────────
     // Signal systemd that the service is ready. This unblocks any unit that
@@ -396,6 +415,7 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!(error = %e, "failed to save sessions on shutdown");
     }
 
+    let _ = shutdown_tx.send(true); // Signal task worker to stop.
     let _ = wd_tx.send(true);
     tracing::info!("odin shutdown complete");
     Ok(())

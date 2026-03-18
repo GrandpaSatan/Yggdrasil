@@ -635,7 +635,8 @@ impl YggdrasilServer {
         Actions: 'status' (show all VMs and GPU allocation), \
         'launch' (start a VM with automatic GPU assignment — requires vm_name), \
         'stop' (gracefully shutdown a VM and release its GPU — requires vm_name), \
-        'list-gpus' (show available GPUs in the pool).")]
+        'list-gpus' (show available GPUs in the pool), \
+        'pair' (enter Moonlight pairing PIN for Sunshine — requires vm_name and pin).")]
     async fn gaming_tool(
         &self,
         Parameters(params): Parameters<GamingParams>,

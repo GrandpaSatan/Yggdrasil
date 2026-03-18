@@ -128,4 +128,37 @@ pub struct AppState {
     pub tool_registry: Arc<Vec<ToolSpec>>,
     /// Optional gaming orchestration config.  Present when `GAMING_CONFIG_PATH` is set.
     pub gaming_config: Option<ygg_gaming::config::GamingConfig>,
+    /// SDR-based skill cache for instant tool dispatch on repeat voice commands.
+    pub skill_cache: Arc<crate::skill_cache::SkillCache>,
+}
+
+impl AppState {
+    /// Find an alternative backend after a connection failure.
+    ///
+    /// Returns the first backend (other than `failed_backend`) that has
+    /// available semaphore permits.  Prefers backends that list `model`
+    /// in their model set, but will fall back to any reachable backend.
+    pub fn find_fallback_backend(
+        &self,
+        failed_backend: &str,
+        model: &str,
+    ) -> Option<&BackendState> {
+        // First pass: same model on a different backend.
+        let with_model = self
+            .backends
+            .iter()
+            .find(|b| {
+                b.name != failed_backend
+                    && b.models.iter().any(|m| m == model)
+                    && b.semaphore.available_permits() > 0
+            });
+        if with_model.is_some() {
+            return with_model;
+        }
+
+        // Second pass: any other backend with capacity.
+        self.backends.iter().find(|b| {
+            b.name != failed_backend && b.semaphore.available_permits() > 0
+        })
+    }
 }

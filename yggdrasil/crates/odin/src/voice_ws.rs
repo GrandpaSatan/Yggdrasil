@@ -179,18 +179,18 @@ async fn handle_voice_session(mut socket: WebSocket, state: AppState, voice_api_
                 if let Ok(msg) = serde_json::from_str::<serde_json::Value>(&text) {
                     match msg.get("type").and_then(|t| t.as_str()) {
                         Some("resume") if !negotiated => {
-                            if let Some(id) = msg.get("session_id").and_then(|v| v.as_str()) {
-                                if state.session_store.get_session(id).is_some() {
-                                    session_id = id.to_string();
-                                    tracing::info!(session_id = %session_id, "voice session resumed");
-                                    let _ = socket
-                                        .send(Message::Text(
-                                            serde_json::json!({"type": "resumed", "session_id": &session_id})
-                                                .to_string()
-                                                .into(),
-                                        ))
-                                        .await;
-                                }
+                            if let Some(id) = msg.get("session_id").and_then(|v| v.as_str())
+                                && state.session_store.get_session(id).is_some()
+                            {
+                                session_id = id.to_string();
+                                tracing::info!(session_id = %session_id, "voice session resumed");
+                                let _ = socket
+                                    .send(Message::Text(
+                                        serde_json::json!({"type": "resumed", "session_id": &session_id})
+                                            .to_string()
+                                            .into(),
+                                    ))
+                                    .await;
                             }
                         }
                         Some("vad_end") => {
@@ -237,6 +237,7 @@ async fn handle_voice_session(mut socket: WebSocket, state: AppState, voice_api_
 
 /// Run the full STT -> chat -> TTS pipeline for a completed utterance and send
 /// results back over the WebSocket.
+#[allow(clippy::too_many_arguments)]
 async fn process_utterance(
     socket: &mut WebSocket,
     state: &AppState,
@@ -260,34 +261,168 @@ async fn process_utterance(
         .flat_map(|s| s.to_le_bytes())
         .collect();
 
-    // ── Omni path: MiniCPM-o handles STT + LLM in one call ──────
+    // ── Omni path: MiniCPM-o handles STT + LLM + tool calls in one pass ──
+    // System prompt includes tool definitions; model outputs <tool_call> tags.
     // Falls back to legacy STT → Ollama agent loop if omni is unavailable.
     let response_text = if let Some(omni) = omni_url {
-        match call_omni_chat(http, omni, &pcm_bytes, session_id).await {
-            Ok((transcript, response)) => {
-                // Send transcript to client.
+        // Build the system prompt with persona + tool routing + gaming context.
+        let rag_context = crate::rag::RagContext::default();
+        let gaming_ctx = state.gaming_config.as_ref().map(|gc| {
+            let vm_names: Vec<&str> = gc.vms.iter().map(|v| v.name.as_str()).collect();
+            format!("Available VMs on Thor: {}", vm_names.join(", "))
+        });
+        let system_prompt = crate::rag::build_system_prompt(
+            &rag_context,
+            "voice",
+            gaming_ctx.as_deref(),
+        );
+
+        // ── SDR skill cache: fast-path for repeat commands ──────────
+        // Fingerprint the raw audio directly into a 256-bit SDR (~1ms, no
+        // network, no models). If a cached skill matches, skip the LLM entirely.
+        let audio_sdr = state.skill_cache.fingerprint(audio_buffer);
+        if let Some(skill_match) = state.skill_cache.match_skill(&audio_sdr).await {
+            tracing::info!(
+                tool = %skill_match.tool_name,
+                similarity = skill_match.similarity,
+                "skill cache HIT — skipping LLM inference"
+            );
+
+            // Execute cached tool directly.
+            if let Some(spec) = crate::tool_registry::find_tool(
+                &state.tool_registry, &skill_match.tool_name,
+            ) {
+                let effective_timeout = spec
+                    .timeout_override_secs
+                    .map(std::time::Duration::from_secs)
+                    .unwrap_or(std::time::Duration::from_secs(15));
+
+                let result = tokio::time::timeout(
+                    effective_timeout,
+                    crate::tool_registry::execute_tool(
+                        state, spec, &skill_match.tool_args, effective_timeout,
+                    ),
+                ).await;
+
+                let result_text = match result {
+                    Ok(Ok(output)) => output,
+                    Ok(Err(e)) => format!("Error: {e}"),
+                    Err(_) => "timed out".to_string(),
+                };
+
+                // Brief confirmation via omni text chat.
+                let confirmation = call_omni_text_chat(
+                    http, omni,
+                    &format!("Tool {} result: {}. Give a brief spoken confirmation.", skill_match.tool_name, result_text),
+                    &system_prompt,
+                ).await.unwrap_or_else(|_| format!("Done, sir. {result_text}"));
+
                 let _ = socket
                     .send(Message::Text(
-                        serde_json::json!({"type": "transcript", "text": &transcript})
+                        serde_json::json!({"type": "response", "text": &confirmation})
                             .to_string()
                             .into(),
                     ))
                     .await;
-
-                // Update session store with both messages.
-                state.session_store.append_messages(
-                    session_id,
-                    &[
-                        crate::session::CompactMessage::new("user", &transcript),
-                        crate::session::CompactMessage::new("assistant", &response),
-                    ],
-                );
-
-                response
+                send_tts(socket, http, tts_url, &confirmation).await;
+                return;
             }
+        }
+
+        match call_omni_chat(http, omni, &pcm_bytes, &system_prompt).await {
+            Ok(raw_response) if !raw_response.is_empty() => {
+                // Parse and execute any tool calls from the response.
+                let (tool_calls, spoken_text_raw) = parse_tool_calls(&raw_response);
+                let spoken_text = strip_think_tags(&spoken_text_raw);
+
+                if !tool_calls.is_empty() {
+                    let mut tool_results = Vec::new();
+                    let tool_timeout = std::time::Duration::from_secs(
+                        state.config.agent.as_ref()
+                            .map(|a| a.tool_timeout_secs)
+                            .unwrap_or(15),
+                    );
+
+                    for tc in &tool_calls {
+                        if let Some(spec) = crate::tool_registry::find_tool(&state.tool_registry, &tc.name) {
+                            // Use per-tool timeout if available.
+                            let effective_timeout = spec
+                                .timeout_override_secs
+                                .map(std::time::Duration::from_secs)
+                                .unwrap_or(tool_timeout);
+
+                            tracing::info!(
+                                tool = %tc.name,
+                                args = %tc.args,
+                                timeout_secs = effective_timeout.as_secs(),
+                                "executing tool call from omni response"
+                            );
+
+                            let result = tokio::time::timeout(
+                                effective_timeout,
+                                crate::tool_registry::execute_tool(state, spec, &tc.args, effective_timeout),
+                            )
+                            .await;
+
+                            match result {
+                                Ok(Ok(output)) => {
+                                    tracing::info!(tool = %tc.name, "tool executed successfully");
+                                    tool_results.push(format!("{}: {}", tc.name, output));
+                                }
+                                Ok(Err(e)) => {
+                                    tracing::warn!(tool = %tc.name, error = %e, "tool execution failed");
+                                    tool_results.push(format!("{}: Error: {}", tc.name, e));
+                                }
+                                Err(_) => {
+                                    tracing::warn!(tool = %tc.name, "tool execution timed out");
+                                    tool_results.push(format!("{}: timed out", tc.name));
+                                }
+                            }
+                        } else {
+                            tracing::warn!(tool = %tc.name, "unknown tool in omni response");
+                        }
+                    }
+
+                    // Learn successful tool calls in the SDR skill cache.
+                    // Uses the audio SDR already computed at the top of this block.
+                    if !tool_calls.is_empty() && tool_results.iter().any(|r| !r.contains("Error:") && !r.contains("timed out")) {
+                        let skill_cache = state.skill_cache.clone();
+                        let first_tc_name = tool_calls[0].name.clone();
+                        let first_tc_args = tool_calls[0].args.clone();
+                        let label = spoken_text.clone();
+                        tokio::spawn(async move {
+                            skill_cache.learn(audio_sdr, label, first_tc_name, first_tc_args).await;
+                        });
+                    }
+
+                    // If we have tool results, ask omni for a spoken confirmation.
+                    if !tool_results.is_empty() {
+                        let confirmation_prompt = format!(
+                            "Tool results:\n{}\n\nGive a brief spoken confirmation of what happened.",
+                            tool_results.join("\n")
+                        );
+                        match call_omni_text_chat(http, omni, &confirmation_prompt, &system_prompt).await {
+                            Ok(confirmation) => confirmation,
+                            Err(_) => {
+                                // Fallback: use the spoken text from the original response
+                                if spoken_text.is_empty() {
+                                    format!("Done, sir. {}", tool_results.join(". "))
+                                } else {
+                                    spoken_text
+                                }
+                            }
+                        }
+                    } else {
+                        spoken_text
+                    }
+                } else {
+                    // No tool calls — pure conversational response.
+                    spoken_text
+                }
+            }
+            Ok(_) => return, // Empty response — silence
             Err(e) => {
                 tracing::warn!(error = %e, "omni chat failed, falling back to legacy pipeline");
-                // Fall through to legacy path below.
                 match legacy_stt_chat(http, state, stt_url, socket, &pcm_bytes, session_id).await {
                     Some(text) => text,
                     None => return,
@@ -389,20 +524,51 @@ fn rms_energy_i16(samples: &[i16]) -> f32 {
 // Omni + legacy pipeline helpers
 // ─────────────────────────────────────────────────────────────────
 
-/// Call MiniCPM-o omni server — sends raw PCM audio directly to the chat
-/// endpoint. The model understands speech natively and responds as Fergus.
-/// No separate transcription step needed.
+/// Send TTS audio back over the WebSocket.
+async fn send_tts(socket: &mut WebSocket, http: &reqwest::Client, tts_url: &str, text: &str) {
+    match call_tts(http, tts_url, text).await {
+        Ok((audio_bytes, sample_rate)) => {
+            let _ = socket
+                .send(Message::Text(
+                    serde_json::json!({"type": "audio_start", "sample_rate": sample_rate})
+                        .to_string().into(),
+                ))
+                .await;
+            for chunk in audio_bytes.chunks(8192) {
+                if socket.send(Message::Binary(chunk.to_vec().into())).await.is_err() {
+                    return;
+                }
+            }
+            let _ = socket
+                .send(Message::Text(
+                    serde_json::json!({"type": "audio_end"}).to_string().into(),
+                ))
+                .await;
+        }
+        Err(e) => {
+            let _ = socket
+                .send(Message::Text(
+                    serde_json::json!({"type": "error", "message": format!("TTS failed: {e}")})
+                        .to_string().into(),
+                ))
+                .await;
+        }
+    }
+}
+
+/// Call MiniCPM-o omni server with audio input AND a system prompt that
+/// includes tool definitions. The model can respond with `<tool_call>` tags
+/// which Odin will parse and execute.
 ///
 /// Returns `(transcript_placeholder, response_text)` on success.
 async fn call_omni_chat(
     client: &reqwest::Client,
     omni_url: &str,
     pcm_bytes: &[u8],
-    _session_id: &str,
-) -> Result<(String, String), String> {
+    system_prompt: &str,
+) -> Result<String, String> {
     use base64::Engine;
 
-    // Encode PCM as WAV in memory, then base64 for the chat endpoint.
     let wav_bytes = pcm_to_wav(pcm_bytes, 16000);
     let audio_b64 = base64::engine::general_purpose::STANDARD.encode(&wav_bytes);
 
@@ -410,6 +576,7 @@ async fn call_omni_chat(
     let body = serde_json::json!({
         "audio_b64": audio_b64,
         "generate_audio": false,
+        "system_prompt": system_prompt,
     });
 
     let resp = client
@@ -434,8 +601,83 @@ async fn call_omni_chat(
         .unwrap_or("")
         .to_string();
 
-    tracing::info!(response = %response_text, "omni response");
-    Ok(("[audio input]".to_string(), strip_think_tags(&response_text)))
+    tracing::info!(response = %response_text, "omni chat response");
+    // Do NOT strip_think_tags here — the caller needs raw output to parse
+    // <tool_call> tags first. Think tags are stripped from the spoken text
+    // after tool call extraction in process_utterance.
+    Ok(response_text)
+}
+
+/// Call MiniCPM-o with text-only input (no audio) for follow-up confirmation.
+async fn call_omni_text_chat(
+    client: &reqwest::Client,
+    omni_url: &str,
+    text: &str,
+    system_prompt: &str,
+) -> Result<String, String> {
+    let chat_url = format!("{omni_url}/api/v1/chat");
+    let body = serde_json::json!({
+        "text": text,
+        "generate_audio": false,
+        "system_prompt": system_prompt,
+    });
+
+    let resp = client
+        .post(&chat_url)
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await
+        .map_err(|e| format!("omni text chat failed: {e}"))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("omni text chat returned {}", resp.status()));
+    }
+
+    let result: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("omni text chat parse failed: {e}"))?;
+
+    Ok(strip_think_tags(result["text"].as_str().unwrap_or("")))
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Tool call parsing
+// ─────────────────────────────────────────────────────────────────
+
+/// A tool call parsed from `<tool_call>{"name":"...","args":{...}}</tool_call>` tags.
+struct ParsedToolCall {
+    name: String,
+    args: serde_json::Value,
+}
+
+/// Parse `<tool_call>...</tool_call>` tags from model output.
+/// Returns (parsed_calls, remaining_text_with_tags_stripped).
+fn parse_tool_calls(text: &str) -> (Vec<ParsedToolCall>, String) {
+    let mut calls = Vec::new();
+    let mut cleaned = text.to_string();
+
+    while let Some(start) = cleaned.find("<tool_call>") {
+        let Some(end) = cleaned.find("</tool_call>") else {
+            break;
+        };
+
+        let json_str = &cleaned[start + "<tool_call>".len()..end];
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(json_str.trim()) {
+            let name = parsed["name"].as_str().unwrap_or("").to_string();
+            let args = parsed["args"].clone();
+            if !name.is_empty() {
+                calls.push(ParsedToolCall { name, args });
+            }
+        } else {
+            tracing::warn!(json = json_str, "failed to parse tool_call JSON");
+        }
+
+        cleaned.replace_range(start..end + "</tool_call>".len(), "");
+    }
+
+    (calls, cleaned.trim().to_string())
 }
 
 /// Convert raw PCM s16le bytes to a minimal WAV file in memory.

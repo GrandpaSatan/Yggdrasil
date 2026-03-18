@@ -22,6 +22,8 @@ pub mod proxy;
 pub mod rag;
 pub mod router;
 pub mod session;
+pub mod skill_cache;
 pub mod state;
+pub mod task_worker;
 pub mod tool_registry;
 pub mod voice_ws;

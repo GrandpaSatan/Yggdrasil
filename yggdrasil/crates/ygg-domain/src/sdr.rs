@@ -38,6 +38,28 @@ pub fn or(a: &Sdr, b: &Sdr) -> Sdr {
     out
 }
 
+/// Binarize a float embedding into a 256-bit SDR via sign-threshold.
+///
+/// Each dimension >= 0.0 becomes a 1 bit, < 0.0 becomes 0.
+/// The embedding must have at least `SDR_BITS` (256) dimensions.
+///
+/// # Panics
+/// Panics if `embedding.len() < SDR_BITS`.
+pub fn binarize(embedding: &[f32]) -> Sdr {
+    assert!(
+        embedding.len() >= SDR_BITS,
+        "embedding must have at least {SDR_BITS} dimensions, got {}",
+        embedding.len()
+    );
+    let mut sdr = ZERO;
+    for i in 0..SDR_BITS {
+        if embedding[i] >= 0.0 {
+            sdr[i / 64] |= 1u64 << (i % 64);
+        }
+    }
+    sdr
+}
+
 /// Count the number of set bits (population count) in the SDR.
 pub fn popcount(sdr: &Sdr) -> u32 {
     sdr.iter().map(|w| w.count_ones()).sum()

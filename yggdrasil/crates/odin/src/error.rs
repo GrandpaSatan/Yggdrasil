@@ -97,6 +97,17 @@ impl IntoResponse for OdinError {
     }
 }
 
+impl OdinError {
+    /// Returns `true` if this error is a TCP-level connection failure
+    /// (as opposed to an HTTP-level error response from a running backend).
+    ///
+    /// All connection errors in `proxy.rs` use the pattern
+    /// `"... connection failed: {e}"`, so we match on that substring.
+    pub fn is_connection_error(&self) -> bool {
+        matches!(self, OdinError::Upstream(msg) if msg.contains("connection failed"))
+    }
+}
+
 /// Convert a `reqwest::Error` into `OdinError::Upstream` so handlers can
 /// use the `?` operator on reqwest calls in Ollama proxy functions.
 impl From<reqwest::Error> for OdinError {

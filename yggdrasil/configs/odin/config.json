@@ -3,10 +3,10 @@
   "listen_addr": "0.0.0.0:8080",
   "backends": [
     {
-      "name": "munin",
-      "url": "http://localhost:11434",
+      "name": "munin-cpu",
+      "url": "http://localhost:11435",
       "backend_type": "ollama",
-      "models": ["qwen3.5:9b", "qwen3.5:4b"],
+      "models": ["qwen3.5:4b"],
       "max_concurrent": 2,
       "context_window": 16384
     },
@@ -20,8 +20,8 @@
     }
   ],
   "routing": {
-    "default_model": "qwen3.5:9b",
-    "default_backend": "munin",
+    "default_model": "qwen3.5:4b",
+    "default_backend": "munin-cpu",
     "rules": [
       {
         "intent": "coding",
@@ -30,8 +30,8 @@
       },
       {
         "intent": "home_automation",
-        "model": "qwen3.5:9b",
-        "backend": "munin"
+        "model": "qwen3.5:4b",
+        "backend": "munin-cpu"
       }
     ]
   },
@@ -56,6 +56,12 @@
     "session_ttl_secs": 3600,
     "context_budget_tokens": 14000,
     "generation_reserve": 2048
+  },
+  "task_worker": {
+    "enabled": true,
+    "poll_interval_secs": 30,
+    "agent_name": "fergus",
+    "model": "qwen3.5:4b"
   },
   "ha": {
     "url": "http://${CHIRP_IP}:8123",

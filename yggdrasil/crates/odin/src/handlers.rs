@@ -96,6 +96,47 @@ async fn try_cloud_fallback(
     Err(local_err)
 }
 
+/// Try cloud fallback, returning a full `ChatCompletionResponse`.
+///
+/// Used by `chat_handler` paths where the caller needs a structured response
+/// rather than just a plain string.
+async fn try_cloud_or_fail(
+    cloud_pool: &Option<CloudPool>,
+    packed_messages: &[ChatMessage],
+    model: &str,
+    completion_id: &str,
+    local_err: OdinError,
+) -> Result<crate::openai::ChatCompletionResponse, OdinError> {
+    if let Some(pool) = cloud_pool
+        && pool.fallback_enabled
+    {
+        let cloud_messages: Vec<_> = packed_messages
+            .iter()
+            .map(|m| ygg_cloud::adapter::ChatMessage {
+                role: m.role.to_string(),
+                content: m.content.clone(),
+            })
+            .collect();
+
+        if let Some(cloud_content) = pool.fallback_chat(cloud_messages, Some(model)).await {
+            tracing::info!("cloud fallback produced response");
+            return Ok(crate::openai::ChatCompletionResponse {
+                id: completion_id.to_string(),
+                object: "chat.completion".to_string(),
+                created: unix_now(),
+                model: format!("cloud-fallback:{model}"),
+                choices: vec![crate::openai::Choice {
+                    index: 0,
+                    message: ChatMessage::new(Role::Assistant, cloud_content),
+                    finish_reason: Some("stop".to_string()),
+                }],
+                usage: None,
+            });
+        }
+    }
+    Err(local_err)
+}
+
 /// Fire-and-forget: check if a session needs rolling summarization.
 ///
 /// When total session tokens exceed 70% of the context budget, the oldest
@@ -831,12 +872,36 @@ pub async fn chat_handler(
             };
 
             if request.stream {
-                let handle = proxy::stream_chat_openai(
+                let openai_request_clone = openai_request.clone();
+                let handle = match proxy::stream_chat_openai(
                     state.http_client.clone(),
                     decision.backend_url.clone(),
                     openai_request,
                 )
-                .await?;
+                .await
+                {
+                    Ok(h) => h,
+                    Err(e) if e.is_connection_error() => {
+                        if let Some(fb) = state.find_fallback_backend(&decision.backend_name, &decision.model) {
+                            tracing::warn!(
+                                from = %decision.backend_name,
+                                to = %fb.name,
+                                "stream connection error — failing over (openai)"
+                            );
+                            decision.backend_url = fb.url.clone();
+                            decision.backend_name = fb.name.clone();
+                            proxy::stream_chat_openai(
+                                state.http_client.clone(),
+                                fb.url.clone(),
+                                openai_request_clone,
+                            )
+                            .await?
+                        } else {
+                            return Err(e);
+                        }
+                    }
+                    Err(e) => return Err(e),
+                };
 
                 // Spawn background task: wait for stream completion, then store
                 // the real response text as an engram and update the session.
@@ -886,39 +951,7 @@ pub async fn chat_handler(
                 let response = match local_result {
                     Ok(resp) => resp,
                     Err(local_err) => {
-                        // If local backend failed and cloud fallback is enabled, try cloud providers
-                        if let Some(pool) = &state.cloud_pool {
-                            if pool.fallback_enabled {
-                                let cloud_messages: Vec<_> = packed_messages.iter().map(|m| {
-                                    ygg_cloud::adapter::ChatMessage {
-                                        role: m.role.to_string(),
-                                        content: m.content.clone(),
-                                    }
-                                }).collect();
-
-                                if let Some(cloud_content) = pool.fallback_chat(cloud_messages, Some(&decision.model)).await {
-                                    tracing::info!("cloud fallback produced response for openai backend failure");
-                                    crate::openai::ChatCompletionResponse {
-                                        id: completion_id.clone(),
-                                        object: "chat.completion".to_string(),
-                                        created: unix_now(),
-                                        model: format!("cloud-fallback:{}", decision.model),
-                                        choices: vec![crate::openai::Choice {
-                                            index: 0,
-                                            message: ChatMessage::new(Role::Assistant, cloud_content),
-                                            finish_reason: Some("stop".to_string()),
-                                        }],
-                                        usage: None,
-                                    }
-                                } else {
-                                    return Err(local_err);
-                                }
-                            } else {
-                                return Err(local_err);
-                            }
-                        } else {
-                            return Err(local_err);
-                        }
+                        try_cloud_or_fail(&state.cloud_pool, &packed_messages, &decision.model, &completion_id, local_err).await?
                     }
                 };
 
@@ -1074,13 +1107,46 @@ pub async fn chat_handler(
             };
 
             if request.stream {
-                let handle = proxy::stream_chat(
+                let ollama_request_clone = ollama_request.clone();
+                let handle = match proxy::stream_chat(
                     state.http_client.clone(),
                     decision.backend_url.clone(),
                     ollama_request,
                     completion_id.clone(),
                 )
-                .await?;
+                .await
+                {
+                    Ok(h) => h,
+                    Err(e) if e.is_connection_error() => {
+                        if let Some(fb) = state.find_fallback_backend(&decision.backend_name, &decision.model) {
+                            tracing::warn!(
+                                from = %decision.backend_name,
+                                to = %fb.name,
+                                "stream connection error — failing over"
+                            );
+                            let mut retry_req = ollama_request_clone;
+                            if !fb.models.iter().any(|m| m == &decision.model)
+                                && let Some(fb_model) = fb.models.first()
+                            {
+                                retry_req.model = fb_model.clone();
+                            }
+                            // Update decision fields for the background task.
+                            decision.backend_url = fb.url.clone();
+                            decision.backend_name = fb.name.clone();
+                            decision.model = retry_req.model.clone();
+                            proxy::stream_chat(
+                                state.http_client.clone(),
+                                fb.url.clone(),
+                                retry_req,
+                                completion_id.clone(),
+                            )
+                            .await?
+                        } else {
+                            return Err(e);
+                        }
+                    }
+                    Err(e) => return Err(e),
+                };
 
                 // Spawn background task: wait for stream completion, then store
                 // the real response text as an engram and update the session.
@@ -1118,6 +1184,7 @@ pub async fn chat_handler(
                 Ok(resp)
             } else {
                 let gen_start = std::time::Instant::now();
+                let ollama_request_clone = ollama_request.clone();
                 let local_result = proxy::generate_chat(
                     &state.http_client,
                     &decision.backend_url,
@@ -1129,40 +1196,46 @@ pub async fn chat_handler(
 
                 let response = match local_result {
                     Ok(resp) => resp,
-                    Err(local_err) => {
-                        // If local backend failed and cloud fallback is enabled, try cloud providers
-                        if let Some(pool) = &state.cloud_pool {
-                            if pool.fallback_enabled {
-                                let cloud_messages: Vec<_> = packed_messages.iter().map(|m| {
-                                    ygg_cloud::adapter::ChatMessage {
-                                        role: m.role.to_string(),
-                                        content: m.content.clone(),
-                                    }
-                                }).collect();
-
-                                if let Some(cloud_content) = pool.fallback_chat(cloud_messages, Some(&decision.model)).await {
-                                    tracing::info!("cloud fallback produced response for ollama backend failure");
-                                    crate::openai::ChatCompletionResponse {
-                                        id: completion_id.clone(),
-                                        object: "chat.completion".to_string(),
-                                        created: unix_now(),
-                                        model: format!("cloud-fallback:{}", decision.model),
-                                        choices: vec![crate::openai::Choice {
-                                            index: 0,
-                                            message: ChatMessage::new(Role::Assistant, cloud_content),
-                                            finish_reason: Some("stop".to_string()),
-                                        }],
-                                        usage: None,
-                                    }
-                                } else {
-                                    return Err(local_err);
-                                }
-                            } else {
-                                return Err(local_err);
+                    Err(local_err) if local_err.is_connection_error() => {
+                        // ── Connection-error failover: try alternate backend ──
+                        if let Some(fb) = state.find_fallback_backend(&decision.backend_name, &decision.model) {
+                            tracing::warn!(
+                                from = %decision.backend_name,
+                                to = %fb.name,
+                                "connection error — failing over to alternate backend"
+                            );
+                            let fb_permit = fb.semaphore.try_acquire().map_err(|_| {
+                                OdinError::BackendUnavailable(format!(
+                                    "fallback backend '{}' also at capacity", fb.name
+                                ))
+                            })?;
+                            let mut retry_req = ollama_request_clone;
+                            // Use fallback's first model if original model isn't available there.
+                            if !fb.models.iter().any(|m| m == &decision.model)
+                                && let Some(fb_model) = fb.models.first()
+                            {
+                                retry_req.model = fb_model.clone();
+                            }
+                            let retry_result = proxy::generate_chat(
+                                &state.http_client,
+                                &fb.url,
+                                retry_req,
+                                &completion_id,
+                            )
+                            .await;
+                            drop(fb_permit);
+                            match retry_result {
+                                Ok(resp) => resp,
+                                Err(retry_err) => return Err(retry_err),
                             }
                         } else {
-                            return Err(local_err);
+                            // No alternate backend — try cloud fallback
+                            try_cloud_or_fail(&state.cloud_pool, &packed_messages, &decision.model, &completion_id, local_err).await?
                         }
+                    }
+                    Err(local_err) => {
+                        // Non-connection error — try cloud fallback directly
+                        try_cloud_or_fail(&state.cloud_pool, &packed_messages, &decision.model, &completion_id, local_err).await?
                     }
                 };
 

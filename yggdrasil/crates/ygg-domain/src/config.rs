@@ -28,7 +28,38 @@ pub struct OdinConfig {
     /// When present, Odin can run an agent loop where local LLMs call MCP tools.
     #[serde(default)]
     pub agent: Option<AgentLoopConfig>,
+    /// Background task worker configuration.
+    /// When enabled, Odin polls the Mimir task queue and executes tasks autonomously.
+    #[serde(default)]
+    pub task_worker: Option<TaskWorkerConfig>,
 }
+
+/// Configuration for Odin's autonomous background task worker.
+///
+/// Polls Mimir's task queue at a fixed interval, claims pending tasks, interprets
+/// them via a lightweight LLM, and executes tool calls autonomously.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskWorkerConfig {
+    /// Whether the task worker is enabled.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Poll interval in seconds (default 30).
+    #[serde(default = "default_tw_poll_interval")]
+    pub poll_interval_secs: u64,
+    /// Agent name used when claiming tasks (default "fergus").
+    #[serde(default = "default_tw_agent_name")]
+    pub agent_name: String,
+    /// Optional project scope filter for task pop.
+    #[serde(default)]
+    pub project: Option<String>,
+    /// Model to use for task interpretation (default "qwen3.5:4b").
+    #[serde(default = "default_tw_model")]
+    pub model: String,
+}
+
+fn default_tw_poll_interval() -> u64 { 30 }
+fn default_tw_agent_name() -> String { "fergus".to_string() }
+fn default_tw_model() -> String { "qwen3.5:4b".to_string() }
 
 /// Cloud provider configuration for fallback routing through ygg-cloud.
 #[derive(Debug, Clone, Serialize, Deserialize)]

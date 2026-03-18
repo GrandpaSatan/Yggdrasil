@@ -117,6 +117,7 @@ fn test_state(_ollama_url: &str, mimir_url: &str) -> AppState {
         cloud: None,
         voice: None,
         agent: Some(AgentLoopConfig::default()),
+        task_worker: None,
     };
 
     AppState {
@@ -135,6 +136,7 @@ fn test_state(_ollama_url: &str, mimir_url: &str) -> AppState {
         config,
         tool_registry: Arc::new(build_registry()),
         gaming_config: None,
+        skill_cache: Arc::new(odin::skill_cache::SkillCache::new()),
     }
 }
 

@@ -1,0 +1,20 @@
+[Unit]
+Description=Yggdrasil Ollama CPU-only (qwen3.5:4b)
+After=network.target
+
+[Service]
+Type=simple
+User=yggdrasil
+Group=yggdrasil
+ExecStart=/usr/local/bin/ollama-cpu serve
+Restart=on-failure
+RestartSec=10
+Environment=OLLAMA_HOST=0.0.0.0:11435
+Environment=OLLAMA_MODELS=/opt/models/ollama-cpu
+Environment=CUDA_VISIBLE_DEVICES=
+Environment=ROCR_VISIBLE_DEVICES=
+Environment=OLLAMA_MAX_LOADED_MODELS=1
+Environment=OLLAMA_KEEP_ALIVE=24h
+
+[Install]
+WantedBy=multi-user.target
