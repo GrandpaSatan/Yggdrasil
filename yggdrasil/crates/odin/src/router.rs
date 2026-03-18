@@ -119,6 +119,15 @@ fn ha_keywords() -> Vec<String> {
     .collect()
 }
 
+/// Keywords that indicate a gaming/VM request (Thor, Harpy, Morrigan).
+/// Used to suppress HA intent when gaming terms co-occur with "turn on".
+fn gaming_keywords() -> Vec<String> {
+    ["thor", "harpy", "morrigan", "gaming vm", "launch vm", "start vm", "load harpy", "load morrigan"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
+}
+
 fn keywords_for_intent(intent: &str) -> Vec<String> {
     match intent {
         "coding" => coding_keywords(),
@@ -309,6 +318,23 @@ impl SemanticRouter {
             })
             .filter(|(count, _)| *count > 0)
             .max_by_key(|(count, _)| *count);
+
+        // Gaming override: if HA intent won but gaming keywords are present,
+        // suppress to default so HA context doesn't mislead the LLM into
+        // treating Thor/Harpy as Home Assistant entities.
+        let gaming_kws = gaming_keywords();
+        let has_gaming = gaming_kws.iter().any(|kw| lower.contains(kw.as_str()));
+
+        let best = match best {
+            Some((_, rule))
+                if (rule.intent == "home_automation" || rule.intent == "home_assistant")
+                    && has_gaming =>
+            {
+                tracing::info!("gaming keyword detected — suppressing HA intent to default");
+                None
+            }
+            other => other,
+        };
 
         match best {
             Some((_, rule)) => {

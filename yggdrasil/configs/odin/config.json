@@ -39,7 +39,7 @@
     "max_iterations": 5,
     "max_tool_calls_total": 10,
     "tool_timeout_secs": 15,
-    "total_timeout_secs": 60,
+    "total_timeout_secs": 420,
     "default_tiers": ["safe", "restricted"]
   },
   "mimir": {

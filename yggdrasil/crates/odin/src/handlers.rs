@@ -330,8 +330,13 @@ pub async fn process_chat_text(
 
     // ── 6. Pack context with session history ──────────────────────
     let backend_context_window = backend_state.context_window;
-    // Voice pipeline uses the "voice" persona (Alfred) regardless of routed intent.
-    let system_prompt = rag::build_system_prompt(&rag_context, "voice");
+    // Voice pipeline uses the "voice" persona (Fergus) regardless of routed intent.
+    // Inject gaming VM context so the LLM knows to use the `gaming` tool.
+    let gaming_ctx = state.gaming_config.as_ref().map(|gc| {
+        let vm_names: Vec<&str> = gc.vms.iter().map(|v| v.name.as_str()).collect();
+        format!("Available VMs on Thor: {}", vm_names.join(", "))
+    });
+    let system_prompt = rag::build_system_prompt(&rag_context, "voice", gaming_ctx.as_deref());
     let session_snapshot = state.session_store.get_session(session_id);
 
     let packed_messages = if let Some(ref session) = session_snapshot {
@@ -546,7 +551,11 @@ pub async fn process_chat_audio(
         rag::fetch_context(state, "[voice audio input]", "voice").await;
 
     // ── 3. Build system prompt ───────────────────────────────────
-    let system_prompt = rag::build_system_prompt(&rag_context, "voice");
+    let gaming_ctx = state.gaming_config.as_ref().map(|gc| {
+        let vm_names: Vec<&str> = gc.vms.iter().map(|v| v.name.as_str()).collect();
+        format!("Available VMs on Thor: {}", vm_names.join(", "))
+    });
+    let system_prompt = rag::build_system_prompt(&rag_context, "voice", gaming_ctx.as_deref());
 
     // ── 4. Gather session history as text messages ───────────────
     let session_snapshot = state.session_store.get_session(session_id);
@@ -770,7 +779,7 @@ pub async fn chat_handler(
 
     // ── 9. Pack context with session history ──────────────────────
     let backend_context_window = backend_state.context_window;
-    let system_prompt = rag::build_system_prompt(&rag_context, &decision.intent);
+    let system_prompt = rag::build_system_prompt(&rag_context, &decision.intent, None);
     let session_snapshot = state.session_store.get_session(&session_id);
 
     // Load previous project sessions for cross-window context (lowest priority slot).
@@ -1825,6 +1834,7 @@ async fn voice_plain_chat(
 pub struct GamingRequest {
     action: String,
     vm_name: Option<String>,
+    pin: Option<String>,
 }
 
 pub async fn gaming_handler(
@@ -1894,6 +1904,30 @@ pub async fn gaming_handler(
             };
             match ygg_gaming::orchestrator::stop(config, vm_name).await {
                 Ok(()) => Json(json!({"status": "stopped", "vm_name": vm_name})).into_response(),
+                Err(e) => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": e.to_string()})),
+                )
+                    .into_response(),
+            }
+        }
+        "pair" => {
+            let Some(vm_name) = req.vm_name.as_deref() else {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error": "vm_name is required for pair"})),
+                )
+                    .into_response();
+            };
+            let Some(pin) = req.pin.as_deref() else {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error": "pin is required for pair (4-digit Moonlight PIN)"})),
+                )
+                    .into_response();
+            };
+            match ygg_gaming::orchestrator::pair(config, vm_name, pin).await {
+                Ok(msg) => Json(json!({"status": "paired", "message": msg})).into_response(),
                 Err(e) => (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(json!({"error": e.to_string()})),

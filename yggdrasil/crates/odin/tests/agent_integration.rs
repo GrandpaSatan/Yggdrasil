@@ -131,6 +131,7 @@ fn test_state(_ollama_url: &str, mimir_url: &str) -> AppState {
         cloud_pool: None,
         voice_api_url: None,
         stt_url: None,
+        omni_url: None,
         config,
         tool_registry: Arc::new(build_registry()),
         gaming_config: None,
@@ -191,7 +192,7 @@ async fn agent_text_response_no_tool_calls() {
     let config = default_config();
 
     let result = run_agent_loop(
-        &state, &messages, &tools, &registry, &tiers, &decision, "test-1", &config,
+        &state, &messages, &tools, &registry, &tiers, &decision, "test-1", &config, 16384,
     )
     .await;
 
@@ -233,7 +234,7 @@ async fn agent_single_tool_call_then_text() {
     let config = default_config();
 
     let result = run_agent_loop(
-        &state, &messages, &tools, &registry, &tiers, &decision, "test-2", &config,
+        &state, &messages, &tools, &registry, &tiers, &decision, "test-2", &config, 16384,
     )
     .await;
 
@@ -284,7 +285,7 @@ async fn agent_max_iterations_forces_text() {
     };
 
     let result = run_agent_loop(
-        &state, &messages, &tools, &registry, &tiers, &decision, "test-3", &config,
+        &state, &messages, &tools, &registry, &tiers, &decision, "test-3", &config, 16384,
     )
     .await;
 
@@ -327,7 +328,7 @@ async fn agent_unknown_tool_returns_error_to_model() {
     let config = default_config();
 
     let result = run_agent_loop(
-        &state, &messages, &tools, &registry, &tiers, &decision, "test-4", &config,
+        &state, &messages, &tools, &registry, &tiers, &decision, "test-4", &config, 16384,
     )
     .await;
 

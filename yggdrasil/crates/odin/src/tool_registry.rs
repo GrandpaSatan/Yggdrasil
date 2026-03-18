@@ -58,6 +58,10 @@ pub struct ToolSpec {
     pub parameters_schema: JsonValue,
     pub tier: ToolTier,
     pub endpoint: ToolEndpoint,
+    /// Optional per-tool timeout override (seconds). When `Some`, overrides
+    /// the global `AgentLoopConfig.tool_timeout_secs` for this tool only.
+    /// Used for long-running operations like gaming VM launches (WOL + boot).
+    pub timeout_override_secs: Option<u64>,
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -82,6 +86,7 @@ pub fn build_registry() -> Vec<ToolSpec> {
             }),
             tier: ToolTier::Safe,
             endpoint: ToolEndpoint::Muninn("/api/v1/search"),
+            timeout_override_secs: None,
         },
         ToolSpec {
             name: "query_memory",
@@ -96,6 +101,7 @@ pub fn build_registry() -> Vec<ToolSpec> {
             }),
             tier: ToolTier::Safe,
             endpoint: ToolEndpoint::Mimir("/api/v1/query"),
+            timeout_override_secs: None,
         },
         ToolSpec {
             name: "memory_intersect",
@@ -110,6 +116,7 @@ pub fn build_registry() -> Vec<ToolSpec> {
             }),
             tier: ToolTier::Safe,
             endpoint: ToolEndpoint::Mimir("/api/v1/sdr/operations"),
+            timeout_override_secs: None,
         },
         ToolSpec {
             name: "get_sprint_history",
@@ -124,6 +131,7 @@ pub fn build_registry() -> Vec<ToolSpec> {
             }),
             tier: ToolTier::Safe,
             endpoint: ToolEndpoint::Mimir("/api/v1/sprints/list"),
+            timeout_override_secs: None,
         },
         ToolSpec {
             name: "memory_timeline",
@@ -138,6 +146,7 @@ pub fn build_registry() -> Vec<ToolSpec> {
             }),
             tier: ToolTier::Safe,
             endpoint: ToolEndpoint::Mimir("/api/v1/timeline"),
+            timeout_override_secs: None,
         },
         ToolSpec {
             name: "list_models",
@@ -145,6 +154,7 @@ pub fn build_registry() -> Vec<ToolSpec> {
             parameters_schema: json!({ "type": "object", "properties": {} }),
             tier: ToolTier::Safe,
             endpoint: ToolEndpoint::OdinSelf("/v1/models"),
+            timeout_override_secs: None,
         },
         ToolSpec {
             name: "service_health",
@@ -152,6 +162,7 @@ pub fn build_registry() -> Vec<ToolSpec> {
             parameters_schema: json!({ "type": "object", "properties": {} }),
             tier: ToolTier::Safe,
             endpoint: ToolEndpoint::OdinSelf("/health"),
+            timeout_override_secs: None,
         },
         ToolSpec {
             name: "ast_analyze",
@@ -166,6 +177,7 @@ pub fn build_registry() -> Vec<ToolSpec> {
             }),
             tier: ToolTier::Safe,
             endpoint: ToolEndpoint::Muninn("/api/v1/symbols"),
+            timeout_override_secs: None,
         },
         ToolSpec {
             name: "impact_analysis",
@@ -180,6 +192,7 @@ pub fn build_registry() -> Vec<ToolSpec> {
             }),
             tier: ToolTier::Safe,
             endpoint: ToolEndpoint::Muninn("/api/v1/references"),
+            timeout_override_secs: None,
         },
         ToolSpec {
             name: "ha_get_states",
@@ -192,6 +205,7 @@ pub fn build_registry() -> Vec<ToolSpec> {
             }),
             tier: ToolTier::Safe,
             endpoint: ToolEndpoint::Ha(HaToolKind::GetStates),
+            timeout_override_secs: None,
         },
         ToolSpec {
             name: "ha_list_entities",
@@ -204,6 +218,7 @@ pub fn build_registry() -> Vec<ToolSpec> {
             }),
             tier: ToolTier::Safe,
             endpoint: ToolEndpoint::Ha(HaToolKind::ListEntities),
+            timeout_override_secs: None,
         },
         ToolSpec {
             name: "config_version",
@@ -211,6 +226,7 @@ pub fn build_registry() -> Vec<ToolSpec> {
             parameters_schema: json!({ "type": "object", "properties": {} }),
             tier: ToolTier::Safe,
             endpoint: ToolEndpoint::OdinSelf("/api/v1/version"),
+            timeout_override_secs: None,
         },
         // ── Restricted tier (write operations) ──────────────────
         ToolSpec {
@@ -227,20 +243,23 @@ pub fn build_registry() -> Vec<ToolSpec> {
             }),
             tier: ToolTier::Restricted,
             endpoint: ToolEndpoint::Ha(HaToolKind::CallService),
+            timeout_override_secs: None,
         },
         ToolSpec {
             name: "gaming",
-            description: "Manage cloud gaming VMs on Thor (Proxmox). Actions: status (check all VMs and GPUs), launch (wake Thor + assign GPU + start VM), stop (shutdown VM + release GPU), list-gpus (show GPU availability).",
+            description: "Manage cloud gaming VMs on Thor (Proxmox). Actions: status (check all VMs and GPUs), launch (wake Thor + assign GPU + start VM — takes several minutes), stop (shutdown VM + release GPU), list-gpus (show GPU availability), pair (enter Moonlight PIN for Sunshine pairing).",
             parameters_schema: json!({
                 "type": "object",
                 "properties": {
-                    "action": { "type": "string", "description": "Action: status, launch, stop, list-gpus", "enum": ["status", "launch", "stop", "list-gpus"] },
-                    "vm_name": { "type": "string", "description": "VM name (required for launch/stop, e.g. Harpy)" }
+                    "action": { "type": "string", "description": "Action to perform", "enum": ["status", "launch", "stop", "list-gpus", "pair"] },
+                    "vm_name": { "type": "string", "description": "VM name (required for launch/stop/pair, e.g. harpy, morrigan)" },
+                    "pin": { "type": "string", "description": "4-digit Moonlight pairing PIN (required for pair action)" }
                 },
                 "required": ["action"]
             }),
             tier: ToolTier::Restricted,
             endpoint: ToolEndpoint::OdinSelf("/api/v1/gaming"),
+            timeout_override_secs: Some(360),
         },
         ToolSpec {
             name: "store_memory",
@@ -256,6 +275,7 @@ pub fn build_registry() -> Vec<ToolSpec> {
             }),
             tier: ToolTier::Restricted,
             endpoint: ToolEndpoint::Mimir("/api/v1/store"),
+            timeout_override_secs: None,
         },
         ToolSpec {
             name: "context_offload",
@@ -270,6 +290,7 @@ pub fn build_registry() -> Vec<ToolSpec> {
             }),
             tier: ToolTier::Restricted,
             endpoint: ToolEndpoint::Mimir("/api/v1/context/offload"),
+            timeout_override_secs: None,
         },
         ToolSpec {
             name: "context_bridge",
@@ -284,6 +305,7 @@ pub fn build_registry() -> Vec<ToolSpec> {
             }),
             tier: ToolTier::Restricted,
             endpoint: ToolEndpoint::Mimir("/api/v1/context/bridge"),
+            timeout_override_secs: None,
         },
         ToolSpec {
             name: "task_queue",
@@ -299,6 +321,7 @@ pub fn build_registry() -> Vec<ToolSpec> {
             }),
             tier: ToolTier::Restricted,
             endpoint: ToolEndpoint::Mimir("/api/v1/tasks"),
+            timeout_override_secs: None,
         },
         ToolSpec {
             name: "memory_graph",
@@ -315,6 +338,7 @@ pub fn build_registry() -> Vec<ToolSpec> {
             }),
             tier: ToolTier::Restricted,
             endpoint: ToolEndpoint::Mimir("/api/v1/graph"),
+            timeout_override_secs: None,
         },
     ]
 }

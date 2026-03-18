@@ -369,7 +369,11 @@ pub async fn fetch_memory_events(
 /// Each intent gets a role-appropriate base prompt. Common anti-rambling rules
 /// are shared across all intents.
 #[must_use]
-pub fn build_system_prompt(rag: &RagContext, intent: &str) -> String {
+pub fn build_system_prompt(
+    rag: &RagContext,
+    intent: &str,
+    gaming_context: Option<&str>,
+) -> String {
     let role = match intent {
         "coding" => "You are a concise AI coding assistant. \
                       When discussing code, reference specific files and line numbers. \
@@ -380,8 +384,12 @@ pub fn build_system_prompt(rag: &RagContext, intent: &str) -> String {
         "voice" => "You are Fergus, a refined British butler in the tradition of Alfred Pennyworth. \
                       You address the user as 'sir' and speak with dry wit and quiet competence.\n\
                       CRITICAL: You have tools available. When the user asks you to DO something \
-                      (turn on lights, wake a PC, check status, play a game, etc.), you MUST call \
-                      the appropriate tool. Do NOT just say you will do it — actually call the tool. \
+                      (turn on lights, control devices, wake a PC, launch a game, check status, etc.), \
+                      you MUST call the appropriate tool. Do NOT just describe what you would do.\n\
+                      IMPORTANT TOOL ROUTING:\n\
+                      - For lights, switches, climate, media: use `ha_call_service`\n\
+                      - For gaming PCs, VMs, Thor, GPU passthrough: use `gaming`\n\
+                      - For memory/knowledge: use `query_memory`\n\
                       After the tool executes, give a brief spoken confirmation.\n\
                       For questions that don't require action, respond as speech — one to three sentences, \
                       no markdown, no code blocks, no bullet points.",
@@ -412,6 +420,15 @@ pub fn build_system_prompt(rag: &RagContext, intent: &str) -> String {
         prompt.push_str(ha_ctx);
         prompt.push_str(
             "\nProvide specific entity IDs and service calls when answering.",
+        );
+    }
+
+    if let Some(gaming_ctx) = gaming_context {
+        prompt.push_str("\n\n## Gaming VMs (Thor / Proxmox)\n");
+        prompt.push_str(gaming_ctx);
+        prompt.push_str(
+            "\nUse the `gaming` tool with action \"launch\" and vm_name to start a VM, \
+             \"pair\" with vm_name and pin for Moonlight pairing.\n",
         );
     }
 

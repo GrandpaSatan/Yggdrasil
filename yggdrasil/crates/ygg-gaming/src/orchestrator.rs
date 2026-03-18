@@ -302,6 +302,60 @@ pub async fn stop(
     Ok(())
 }
 
+/// Pair a Moonlight client with a VM's Sunshine by entering the 4-digit PIN.
+///
+/// SSHs into the VM and POSTs the PIN to the Sunshine API.
+pub async fn pair(
+    config: &GamingConfig,
+    vm_name: &str,
+    pin: &str,
+) -> Result<String, OrchestratorError> {
+    let vm = config
+        .vms
+        .iter()
+        .find(|v| v.name == vm_name)
+        .ok_or_else(|| OrchestratorError::VmNotFound(vm_name.to_string()))?;
+
+    let ip = vm
+        .ip
+        .as_deref()
+        .ok_or_else(|| OrchestratorError::Pairing(format!("VM '{vm_name}' has no IP configured")))?;
+
+    let ssh_user = vm.ssh_user.as_deref().unwrap_or("yggdrasil");
+    let creds = vm
+        .sunshine_creds
+        .as_deref()
+        .unwrap_or("user:changeme");
+    let port = vm.sunshine_port;
+
+    info!(vm = vm_name, ip = ip, "pairing Moonlight via Sunshine PIN");
+
+    let output = tokio::process::Command::new("ssh")
+        .args([
+            "-o", "StrictHostKeyChecking=accept-new",
+            "-o", "ConnectTimeout=5",
+            &format!("{ssh_user}@{ip}"),
+            &format!(
+                "curl -sk -u {creds} -X POST \"https://localhost:{port}/api/pin\" \
+                 -H \"Content-Type: application/json\" -d '{{\"pin\": \"{pin}\"}}'"
+            ),
+        ])
+        .output()
+        .await
+        .map_err(|e| OrchestratorError::Pairing(format!("SSH failed: {e}")))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if stdout.contains("\"status\":true") {
+        info!(vm = vm_name, "Moonlight pairing successful");
+        Ok(format!("Pairing successful — connect via Moonlight to {ip}"))
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(OrchestratorError::Pairing(format!(
+            "Sunshine returned: {stdout} {stderr}"
+        )))
+    }
+}
+
 /// Get status of all configured VMs and their GPU assignments.
 pub async fn status_all(config: &GamingConfig) -> Result<SystemStatus, OrchestratorError> {
     let client = make_client(config);

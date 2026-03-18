@@ -163,10 +163,16 @@ pub async fn run_agent_loop(
                 }
             };
 
+            // Use per-tool timeout override if available, otherwise global default.
+            let effective_timeout = spec
+                .timeout_override_secs
+                .map(Duration::from_secs)
+                .unwrap_or(tool_timeout);
+
             // Execute with timeout.
             let result = tokio::time::timeout(
-                tool_timeout,
-                tool_registry::execute_tool(state, spec, &tc.function.arguments, tool_timeout),
+                effective_timeout,
+                tool_registry::execute_tool(state, spec, &tc.function.arguments, effective_timeout),
             )
             .await;
 
@@ -189,8 +195,8 @@ pub async fn run_agent_loop(
                 }
                 Err(_) => {
                     crate::metrics::record_agent_tool_call(tool_name, "timeout");
-                    tracing::warn!(tool = tool_name, "tool execution timed out");
-                    format!("Error: tool '{tool_name}' timed out after {}s", config.tool_timeout_secs)
+                    tracing::warn!(tool = tool_name, timeout_secs = effective_timeout.as_secs(), "tool execution timed out");
+                    format!("Error: tool '{tool_name}' timed out after {}s", effective_timeout.as_secs())
                 }
             };
 
