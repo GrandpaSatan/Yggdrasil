@@ -10,10 +10,11 @@
 ///
 /// This follows the same pattern as `ygg-voice::sdr_commands::SdrCommandRegistry`
 /// but learns dynamically from successful tool calls instead of pre-registered commands.
+use std::sync::Arc;
 use std::time::Instant;
 
 use rustfft::num_complex::Complex;
-use rustfft::FftPlanner;
+use rustfft::{Fft, FftPlanner};
 use serde_json::Value as JsonValue;
 use sha2::{Digest, Sha256};
 use tokio::sync::RwLock;
@@ -52,12 +53,14 @@ pub struct SkillMatch {
 
 /// Thread-safe skill cache with audio-SDR matching.
 ///
-/// Pre-computes the Mel filterbank and Hann window at construction time.
+/// Pre-computes the Mel filterbank, Hann window, and FFT plan at construction time.
 pub struct SkillCache {
     skills: RwLock<Vec<CachedSkill>>,
     threshold: f64,
     filterbank: Vec<Vec<f32>>,
     hann_window: Vec<f32>,
+    /// Pre-computed FFT plan for `FFT_SIZE`. `Arc<dyn Fft>` is `Send + Sync`.
+    fft_plan: Arc<dyn Fft<f32>>,
 }
 
 impl Default for SkillCache {
@@ -68,11 +71,14 @@ impl Default for SkillCache {
 
 impl SkillCache {
     pub fn new() -> Self {
+        let mut planner = FftPlanner::<f32>::new();
+        let fft_plan = planner.plan_fft_forward(FFT_SIZE);
         Self {
             skills: RwLock::new(Vec::new()),
             threshold: DEFAULT_THRESHOLD,
             filterbank: build_mel_filterbank(),
             hann_window: build_hann_window(),
+            fft_plan,
         }
     }
 
@@ -94,8 +100,7 @@ impl SkillCache {
             return sdr::ZERO;
         }
 
-        let mut planner = FftPlanner::<f32>::new();
-        let fft = planner.plan_fft_forward(FFT_SIZE);
+        let fft = &self.fft_plan;
         let mut fft_buffer = vec![Complex::new(0.0f32, 0.0f32); FFT_SIZE];
 
         // Average mel energy across all frames.
@@ -140,30 +145,37 @@ impl SkillCache {
     }
 
     /// Query the cache for a matching skill.
+    ///
+    /// Uses a read lock for the linear scan, then a write lock only when a hit
+    /// is found to update `hit_count` and `last_used`. This unblocks concurrent
+    /// readers during the O(N) scan phase. Hit-count updates are best-effort.
     pub async fn match_skill(&self, query_sdr: &Sdr) -> Option<SkillMatch> {
-        let mut guard = self.skills.write().await;
-
-        let mut best_idx = None;
-        let mut best_sim = 0.0_f64;
-
-        for (i, skill) in guard.iter().enumerate() {
-            let sim = sdr::hamming_similarity(query_sdr, &skill.sdr);
-            if sim >= self.threshold && sim > best_sim {
-                best_sim = sim;
-                best_idx = Some(i);
+        // Phase 1: read-only scan.
+        let best = {
+            let guard = self.skills.read().await;
+            let mut best_idx = None;
+            let mut best_sim = 0.0_f64;
+            for (i, skill) in guard.iter().enumerate() {
+                let sim = sdr::hamming_similarity(query_sdr, &skill.sdr);
+                if sim >= self.threshold && sim > best_sim {
+                    best_sim = sim;
+                    best_idx = Some(i);
+                }
             }
-        }
-
-        if let Some(idx) = best_idx {
-            let skill = &mut guard[idx];
-            skill.hit_count += 1;
-            skill.last_used = Instant::now();
-
-            Some(SkillMatch {
-                tool_name: skill.tool_name.clone(),
-                tool_args: skill.tool_args.clone(),
-                similarity: best_sim,
+            best_idx.map(|idx| {
+                let skill = &guard[idx];
+                (idx, skill.tool_name.clone(), skill.tool_args.clone(), best_sim)
             })
+        }; // read lock dropped
+
+        // Phase 2: write lock only on hit (best-effort hit tracking).
+        if let Some((idx, tool_name, tool_args, similarity)) = best {
+            let mut guard = self.skills.write().await;
+            if idx < guard.len() {
+                guard[idx].hit_count += 1;
+                guard[idx].last_used = Instant::now();
+            }
+            Some(SkillMatch { tool_name, tool_args, similarity })
         } else {
             None
         }

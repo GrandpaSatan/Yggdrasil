@@ -67,6 +67,16 @@ fn unix_now() -> u64 {
         .as_secs()
 }
 
+fn to_cloud_messages(packed: &[ChatMessage]) -> Vec<ygg_cloud::adapter::ChatMessage> {
+    packed
+        .iter()
+        .map(|m| ygg_cloud::adapter::ChatMessage {
+            role: m.role.to_string(),
+            content: m.content.clone(),
+        })
+        .collect()
+}
+
 /// Attempt cloud fallback when a local backend fails.
 ///
 /// Converts `packed_messages` to cloud format and tries each adapter in order.
@@ -80,14 +90,7 @@ async fn try_cloud_fallback(
     if let Some(pool) = cloud_pool
         && pool.fallback_enabled
     {
-        let cloud_messages: Vec<_> = packed_messages
-            .iter()
-            .map(|m| ygg_cloud::adapter::ChatMessage {
-                role: m.role.to_string(),
-                content: m.content.clone(),
-            })
-            .collect();
-
+        let cloud_messages = to_cloud_messages(packed_messages);
         if let Some(cloud_content) = pool.fallback_chat(cloud_messages, Some(model)).await {
             tracing::info!("cloud fallback produced response for voice pipeline");
             return Ok(cloud_content);
@@ -110,14 +113,7 @@ async fn try_cloud_or_fail(
     if let Some(pool) = cloud_pool
         && pool.fallback_enabled
     {
-        let cloud_messages: Vec<_> = packed_messages
-            .iter()
-            .map(|m| ygg_cloud::adapter::ChatMessage {
-                role: m.role.to_string(),
-                content: m.content.clone(),
-            })
-            .collect();
-
+        let cloud_messages = to_cloud_messages(packed_messages);
         if let Some(cloud_content) = pool.fallback_chat(cloud_messages, Some(model)).await {
             tracing::info!("cloud fallback produced response");
             return Ok(crate::openai::ChatCompletionResponse {

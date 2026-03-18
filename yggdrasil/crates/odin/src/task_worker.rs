@@ -123,17 +123,15 @@ impl TaskWorker {
         let decision = self.state.router
             .resolve_backend_for_model(&self.config.model)
             .unwrap_or_else(|| {
-                // Fallback: use default backend with configured model.
+                // Fallback: use first configured backend with the configured model.
+                let b = self.state.backends.first();
                 RoutingDecision {
                     intent: "task_worker".to_string(),
                     model: self.config.model.clone(),
-                    backend_url: self.state.backends.first()
-                        .map(|b| b.url.clone())
-                        .unwrap_or_default(),
-                    backend_name: self.state.backends.first()
-                        .map(|b| b.name.clone())
-                        .unwrap_or_default(),
-                    backend_type: ygg_domain::config::BackendType::Ollama,
+                    backend_url: b.map(|b| b.url.clone()).unwrap_or_default(),
+                    backend_name: b.map(|b| b.name.clone()).unwrap_or_default(),
+                    backend_type: b.map(|b| b.backend_type.clone())
+                        .unwrap_or(ygg_domain::config::BackendType::Ollama),
                 }
             });
 

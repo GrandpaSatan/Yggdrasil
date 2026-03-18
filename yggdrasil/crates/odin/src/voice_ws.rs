@@ -37,13 +37,11 @@ pub async fn ws_voice_handler(
     State(state): State<AppState>,
     ws: WebSocketUpgrade,
 ) -> Result<Response, OdinError> {
-    let voice_url = state.voice_api_url.clone().ok_or_else(|| {
+    // Reject early if voice is not configured.
+    state.voice_api_url.as_ref().ok_or_else(|| {
         OdinError::BadRequest("voice is not enabled".to_string())
     })?;
-    // Use dedicated STT URL if configured, otherwise STT goes to the same voice_api_url.
-    let stt_url = state.stt_url.clone().unwrap_or_else(|| voice_url.clone());
-    let omni_url = state.omni_url.clone();
-    Ok(ws.on_upgrade(move |socket| handle_voice_session(socket, state, voice_url, stt_url, omni_url)))
+    Ok(ws.on_upgrade(move |socket| handle_voice_session(socket, state)))
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -81,9 +79,8 @@ const VAD_WINDOW_SAMPLES: usize = SAMPLE_RATE as usize / 2;
 // ─────────────────────────────────────────────────────────────────
 
 /// Drive a single voice WebSocket connection through the VAD -> STT -> LLM -> TTS loop.
-async fn handle_voice_session(mut socket: WebSocket, state: AppState, voice_api_url: String, stt_url: String, omni_url: Option<String>) {
+async fn handle_voice_session(mut socket: WebSocket, state: AppState) {
     let mut session_id = Uuid::new_v4().to_string();
-    let http = state.http_client.clone();
 
     // Send ready message.
     let ready = serde_json::json!({"type": "ready", "session_id": &session_id});
@@ -102,8 +99,8 @@ async fn handle_voice_session(mut socket: WebSocket, state: AppState, voice_api_
     let mut vad_state = VadState::Idle;
     let mut silence_frames: u32 = 0;
     let mut speech_start_sample: usize = 0;
-    // Session resume: allow the first text message to swap session_id.
-    let mut negotiated = false;
+    // Prevent duplicate session resume: only honour the first resume message.
+    let mut seen_resume = false;
 
     loop {
         match socket.recv().await {
@@ -150,12 +147,8 @@ async fn handle_voice_session(mut socket: WebSocket, state: AppState, voice_api_
                                 process_utterance(
                                     &mut socket,
                                     &state,
-                                    &http,
-                                    &stt_url,
-                                    &voice_api_url,
                                     &session_id,
                                     speech_audio,
-                                    omni_url.as_deref(),
                                 )
                                 .await;
 
@@ -178,7 +171,8 @@ async fn handle_voice_session(mut socket: WebSocket, state: AppState, voice_api_
             Some(Ok(Message::Text(text))) => {
                 if let Ok(msg) = serde_json::from_str::<serde_json::Value>(&text) {
                     match msg.get("type").and_then(|t| t.as_str()) {
-                        Some("resume") if !negotiated => {
+                        Some("resume") if !seen_resume => {
+                            seen_resume = true;
                             if let Some(id) = msg.get("session_id").and_then(|v| v.as_str())
                                 && state.session_store.get_session(id).is_some()
                             {
@@ -201,12 +195,8 @@ async fn handle_voice_session(mut socket: WebSocket, state: AppState, voice_api_
                                 process_utterance(
                                     &mut socket,
                                     &state,
-                                    &http,
-                                    &stt_url,
-                                    &voice_api_url,
                                     &session_id,
                                     speech_audio,
-                                    omni_url.as_deref(),
                                 )
                                 .await;
 
@@ -218,7 +208,6 @@ async fn handle_voice_session(mut socket: WebSocket, state: AppState, voice_api_
                         Some("config") => { /* reserved — no-op */ }
                         _ => {}
                     }
-                    negotiated = true;
                 }
             }
 
@@ -237,29 +226,24 @@ async fn handle_voice_session(mut socket: WebSocket, state: AppState, voice_api_
 
 /// Run the full STT -> chat -> TTS pipeline for a completed utterance and send
 /// results back over the WebSocket.
-#[allow(clippy::too_many_arguments)]
 async fn process_utterance(
     socket: &mut WebSocket,
     state: &AppState,
-    http: &reqwest::Client,
-    stt_url: &str,
-    tts_url: &str,
     session_id: &str,
     audio_buffer: &[i16],
-    omni_url: Option<&str>,
 ) {
+    let http = &state.http_client;
+    let voice_api_url = state.voice_api_url.as_deref().unwrap_or_default();
+    let stt_url = state.stt_url.as_deref().unwrap_or(voice_api_url);
+    let tts_url = voice_api_url;
+    let omni_url = state.omni_url.as_deref();
+
     // Notify client that we are processing.
     let _ = socket
         .send(Message::Text(
             serde_json::json!({"type": "processing"}).to_string().into(),
         ))
         .await;
-
-    // Convert i16 samples to raw PCM bytes for the STT endpoint.
-    let pcm_bytes: Vec<u8> = audio_buffer
-        .iter()
-        .flat_map(|s| s.to_le_bytes())
-        .collect();
 
     // ── Omni path: MiniCPM-o handles STT + LLM + tool calls in one pass ──
     // System prompt includes tool definitions; model outputs <tool_call> tags.
@@ -329,6 +313,9 @@ async fn process_utterance(
             }
         }
 
+        // Cache missed — compute pcm_bytes only now (deferred from top of fn).
+        let pcm_bytes: Vec<u8> = audio_buffer.iter().flat_map(|s| s.to_le_bytes()).collect();
+
         match call_omni_chat(http, omni, &pcm_bytes, &system_prompt).await {
             Ok(raw_response) if !raw_response.is_empty() => {
                 // Parse and execute any tool calls from the response.
@@ -385,7 +372,7 @@ async fn process_utterance(
 
                     // Learn successful tool calls in the SDR skill cache.
                     // Uses the audio SDR already computed at the top of this block.
-                    if !tool_calls.is_empty() && tool_results.iter().any(|r| !r.contains("Error:") && !r.contains("timed out")) {
+                    if tool_results.iter().any(|r| !r.contains("Error:") && !r.contains("timed out")) {
                         let skill_cache = state.skill_cache.clone();
                         let first_tc_name = tool_calls[0].name.clone();
                         let first_tc_args = tool_calls[0].args.clone();
@@ -431,6 +418,7 @@ async fn process_utterance(
         }
     } else {
         // Legacy path: separate STT → agent loop.
+        let pcm_bytes: Vec<u8> = audio_buffer.iter().flat_map(|s| s.to_le_bytes()).collect();
         match legacy_stt_chat(http, state, stt_url, socket, &pcm_bytes, session_id).await {
             Some(text) => text,
             None => return,
@@ -445,44 +433,7 @@ async fn process_utterance(
         ))
         .await;
 
-    // ── TTS ──────────────────────────────────────────────────────
-    match call_tts(http, tts_url, &response_text).await {
-        Ok((audio_bytes, sample_rate)) => {
-            let _ = socket
-                .send(Message::Text(
-                    serde_json::json!({"type": "audio_start", "sample_rate": sample_rate})
-                        .to_string()
-                        .into(),
-                ))
-                .await;
-
-            // Stream audio in 8 KB chunks.
-            for chunk in audio_bytes.chunks(8192) {
-                if socket
-                    .send(Message::Binary(chunk.to_vec().into()))
-                    .await
-                    .is_err()
-                {
-                    return;
-                }
-            }
-
-            let _ = socket
-                .send(Message::Text(
-                    serde_json::json!({"type": "audio_end"}).to_string().into(),
-                ))
-                .await;
-        }
-        Err(e) => {
-            let _ = socket
-                .send(Message::Text(
-                    serde_json::json!({"type": "error", "message": format!("TTS failed: {e}")})
-                        .to_string()
-                        .into(),
-                ))
-                .await;
-        }
-    }
+    send_tts(socket, http, tts_url, &response_text).await;
 }
 
 // ─────────────────────────────────────────────────────────────────
