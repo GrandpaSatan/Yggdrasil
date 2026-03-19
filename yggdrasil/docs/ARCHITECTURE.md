@@ -59,7 +59,7 @@ graph TB
 
 | Service | Crate | Binary | Port | Responsibility | Owned Data | Status |
 |---------|-------|--------|------|----------------|------------|--------|
-| **Odin** | `crates/odin` | `odin` | 8080 | OpenAI-compatible API gateway, semantic routing, RAG pipeline, SSE streaming, Mimir proxy, HA context injection, Prometheus metrics | Routing rules (in-memory from config), HA context cache (60s TTL) | DONE (Sprint 005) |
+| **Odin** | `crates/odin` | `odin` | 8080 | OpenAI-compatible API gateway, semantic routing, RAG pipeline, SSE streaming, Mimir proxy, HA context injection, Prometheus metrics, voice WebSocket pipeline (VAD → SDR skill cache → omni chat → legacy STT fallback), SDR skill cache (`MAX_SKILLS=512`, LRU eviction) | Routing rules (in-memory from config), HA context cache (60s TTL), SDR skill cache (in-memory, `Arc<RwLock<Vec<CachedSkill>>>`) | DONE (Sprint 005) |
 | **Mimir** | `crates/mimir` | `mimir` | 9090 | Engram memory CRUD, embedding, dedup, LSH indexing | `yggdrasil.engrams`, `yggdrasil.lsh_buckets`, Qdrant `engrams` collection | DONE (Sprint 002) |
 | **Huginn** | `crates/huginn` | `huginn` | 9092 (health) | File watcher, tree-sitter AST chunking, code indexing | `yggdrasil.indexed_files`, `yggdrasil.code_chunks`, Qdrant `code_chunks` collection | DONE (Sprint 003) |
 | **Muninn** | `crates/muninn` | `muninn` | 9091 | Semantic code retrieval (vector + BM25 fusion) | Read-only from Huginn's tables | DONE (Sprint 004) |
@@ -163,6 +163,89 @@ sequenceDiagram
     O-)Mi: POST /api/v1/store {cause, effect} (fire-and-forget)
 ```
 
+## Odin: SDR Skill Cache
+
+`SkillCache` (in `crates/odin/src/skill_cache.rs`) provides sub-millisecond dispatch for repeat voice commands by fingerprinting raw PCM audio into a 256-bit SDR (Mel spectrogram → SHA-256) and matching against cached tool calls via Hamming similarity.
+
+### Construction
+
+`SkillCache::new()` pre-computes and stores an `Arc<dyn Fft<f32>>` FFT plan, a Mel filterbank, and a Hann window once at startup. No `FftPlanner` is created per call.
+
+### Concurrency: Two-Phase RwLock
+
+Both `match_skill` and `learn` use a two-phase lock pattern to maximise read concurrency:
+
+- **Phase 1 (read lock):** O(N) Hamming scan to find a candidate. The read lock is dropped before any write.
+- **Phase 2 (write lock):** Re-verify the candidate by SDR equality (not Hamming re-scoring) to guard against TOCTOU races from concurrent `learn()` calls. Write lock is acquired only on a hit (for `match_skill`) or to insert (for `learn`).
+- `learn()` also performs a final dedup check under the write lock before inserting, protecting against two concurrent `learn()` calls inserting the same skill between the two lock acquisitions.
+
+### Capacity
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `MAX_SKILLS` | 512 | Hard cap on cached skills |
+| `DEFAULT_THRESHOLD` | 0.85 | Minimum Hamming similarity for a cache hit |
+
+When `MAX_SKILLS` is reached, the least-recently-used skill is evicted via `swap_remove` (O(1)).
+
+## Data Flow: Voice WebSocket Pipeline (Odin)
+
+The voice pipeline is served at `GET /v1/voice` (WebSocket upgrade). Audio arrives as raw PCM s16le at 16 kHz mono.
+
+```mermaid
+sequenceDiagram
+    participant C as Browser / Voice Client
+    participant O as Odin :8080
+    participant SC as SkillCache (in-memory)
+    participant Omni as MiniCPM-o (omni_url)
+    participant STT as ygg-voice STT (stt_url)
+    participant OL as Ollama (legacy agent loop)
+    participant TTS as ygg-voice TTS (tts_url)
+
+    C->>O: GET /v1/voice (WebSocket upgrade)
+    O-->>C: {"type":"ready","session_id":"..."}
+
+    loop Per utterance (VAD-delimited)
+        C->>O: Binary frames: PCM s16le audio
+        O->>O: RMS energy VAD — accumulate while speaking
+        O->>O: Silence timeout → process_utterance()
+
+        O->>SC: fingerprint(pcm) → SDR (~1ms, CPU only)
+        SC-->>O: match_skill(sdr) → Option<SkillMatch>
+
+        alt Cache HIT (similarity ≥ 0.85)
+            O->>O: execute_tool(cached_args) — skip LLM entirely
+            O->>Omni: text-only confirmation prompt
+            Omni-->>O: spoken confirmation text
+        else Cache MISS — omni path
+            O->>Omni: POST /api/v1/chat {audio_b64, system_prompt}
+            Omni-->>O: response text (may contain <tool_call> tags)
+            opt Tool calls present
+                O->>O: execute_tool() for each <tool_call>
+                O->>Omni: POST /api/v1/chat {tool results, confirmation prompt}
+                Omni-->>O: spoken confirmation text
+                O-)SC: learn(audio_sdr, tool_name, tool_args) — async, fire-and-forget
+            end
+        else omni unavailable — legacy path
+            O->>STT: POST /api/v1/stt (raw PCM bytes)
+            STT-->>O: transcript text
+            O->>OL: agent loop (process_chat_text)
+            OL-->>O: response text
+        end
+
+        O-->>C: {"type":"response","text":"..."}
+        O->>TTS: POST /api/v1/tts {text, voice}
+        TTS-->>O: PCM audio bytes + x-sample-rate header
+        O-->>C: {"type":"audio_start","sample_rate":N} + binary audio frames + {"type":"audio_end"}
+    end
+```
+
+**Key behaviours:**
+- `pcm_bytes` allocation (~64 KB per utterance) is deferred until after the skill cache check. Cache hits pay no allocation cost.
+- `seen_resume` is set only after session validation succeeds, preventing stale session IDs from being accepted.
+- `send_tts()` is a shared helper used by both the cache-hit path and the normal response path.
+- The `pcm_to_bytes()` helper centralises i16→u8 conversion and is called at exactly two sites in `voice_ws.rs`.
+
 ## Data Flow: Mimir Proxy (Fergus Compatibility)
 
 ```mermaid
@@ -260,3 +343,4 @@ Each service loads its config from `configs/<service>/config.yaml`. Config struc
 | 2026-03-09 | Sprint 005 finalized as DONE. Corrected stale references: Hugin model updated from QwQ-32B to qwen3:30b-a3b (Sprint 013). Embedding dimension corrected from 1024 to 4096 (qwen3-embedding actual output). PostgreSQL location corrected from Hades to Munin pgvector Docker container. Munin Ollama annotated as IPEX-LLM container (Sprint 014). Huginn port 9092 added to service registry. All service statuses updated to DONE. | system-architect |
 | 2026-03-09 | Sprint 006 finalized as DONE. ygg-mcp-server status updated to DONE in service registry. HA tools merged into Sprint 006 (originally planned for Sprint 007). HA automation data flow re-attributed from Sprint 007 to Sprint 006. 9 tools + 2 resources fully implemented. Known discrepancy: AutomationGenerator requests model qwq-32b but actual Hugin model is qwen3:30b-a3b. | system-architect |
 | 2026-03-09 | Sprint 010 (Production Hardening) finalized as DONE. Bug fixes applied: (1) all qwq-32b/QwQ-32B model references in ygg-ha and ygg-mcp-server replaced with qwen3:30b-a3b -- resolves the discrepancy noted in the Sprint 006 changelog entry; (2) HA_TOKEN env var expansion added to ygg-mcp-server startup; (3) backup-hades.sh PG host corrected from Hades (<hades-ip>/postgres) to Munin (127.0.0.1/yggdrasil); (4) WatchdogSec=30 re-enabled in all 4 daemon systemd units (odin, mimir, huginn, muninn). Two deploy-only items remain for infra-devops: backup cron job installation on Munin, and NetworkHardware.md model reference update. 57 tests pass, zero qwq references remaining. | system-architect |
+| 2026-03-18 | Odin crate improvements (simplify sprint): (1) `SkillCache` pre-computes `Arc<dyn Fft<f32>>` at construction — no per-call `FftPlanner`; (2) `match_skill` and `learn` both use two-phase RwLock (read for O(N) scan, write only on hit/insert) with TOCTOU guard via SDR equality re-verify under write lock; (3) `learn` enforces `MAX_SKILLS=512` cap with O(1) LRU `swap_remove` eviction; (4) `process_utterance` reduced to 4 params (reads `http`, `stt_url`, `tts_url`, `omni_url` from `AppState`); (5) `pcm_bytes` allocation deferred past skill cache check (saves ~64 KB on cache hits); (6) `seen_resume` flag set only inside session validation success block; (7) `send_tts()` helper extracted; (8) `to_cloud_messages()` private helper extracted in `handlers.rs` to deduplicate `try_cloud_fallback`/`try_cloud_or_fail`; (9) `task_worker.rs` calls `backends.first()` once via `let b` binding. Added Voice WebSocket Pipeline data flow and SDR Skill Cache sections. Munin Ollama inference (3B+ models) confirmed fixed as of 2026-03-18. | system-architect |

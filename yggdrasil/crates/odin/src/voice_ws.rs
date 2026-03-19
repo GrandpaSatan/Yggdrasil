@@ -172,10 +172,10 @@ async fn handle_voice_session(mut socket: WebSocket, state: AppState) {
                 if let Ok(msg) = serde_json::from_str::<serde_json::Value>(&text) {
                     match msg.get("type").and_then(|t| t.as_str()) {
                         Some("resume") if !seen_resume => {
-                            seen_resume = true;
                             if let Some(id) = msg.get("session_id").and_then(|v| v.as_str())
                                 && state.session_store.get_session(id).is_some()
                             {
+                                seen_resume = true;
                                 session_id = id.to_string();
                                 tracing::info!(session_id = %session_id, "voice session resumed");
                                 let _ = socket
@@ -314,7 +314,7 @@ async fn process_utterance(
         }
 
         // Cache missed — compute pcm_bytes only now (deferred from top of fn).
-        let pcm_bytes: Vec<u8> = audio_buffer.iter().flat_map(|s| s.to_le_bytes()).collect();
+        let pcm_bytes = pcm_to_bytes(audio_buffer);
 
         match call_omni_chat(http, omni, &pcm_bytes, &system_prompt).await {
             Ok(raw_response) if !raw_response.is_empty() => {
@@ -418,7 +418,7 @@ async fn process_utterance(
         }
     } else {
         // Legacy path: separate STT → agent loop.
-        let pcm_bytes: Vec<u8> = audio_buffer.iter().flat_map(|s| s.to_le_bytes()).collect();
+        let pcm_bytes = pcm_to_bytes(audio_buffer);
         match legacy_stt_chat(http, state, stt_url, socket, &pcm_bytes, session_id).await {
             Some(text) => text,
             None => return,
@@ -629,6 +629,11 @@ fn parse_tool_calls(text: &str) -> (Vec<ParsedToolCall>, String) {
     }
 
     (calls, cleaned.trim().to_string())
+}
+
+/// Convert raw i16 PCM samples to a flat `Vec<u8>` of little-endian s16 bytes.
+fn pcm_to_bytes(samples: &[i16]) -> Vec<u8> {
+    samples.iter().flat_map(|s| s.to_le_bytes()).collect()
 }
 
 /// Convert raw PCM s16le bytes to a minimal WAV file in memory.

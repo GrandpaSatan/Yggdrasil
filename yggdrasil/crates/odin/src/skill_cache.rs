@@ -23,6 +23,8 @@ use ygg_domain::sdr::{self, Sdr};
 
 /// Minimum Hamming similarity for a cache hit.
 const DEFAULT_THRESHOLD: f64 = 0.85;
+/// Maximum number of cached skills. LRU eviction when this cap is reached.
+const MAX_SKILLS: usize = 512;
 
 // Mel spectrogram constants (matching ygg-voice/mel.rs Whisper params).
 const SAMPLE_RATE: usize = 16_000;
@@ -57,6 +59,7 @@ pub struct SkillMatch {
 pub struct SkillCache {
     skills: RwLock<Vec<CachedSkill>>,
     threshold: f64,
+    max_skills: usize,
     filterbank: Vec<Vec<f32>>,
     hann_window: Vec<f32>,
     /// Pre-computed FFT plan for `FFT_SIZE`. `Arc<dyn Fft>` is `Send + Sync`.
@@ -71,11 +74,16 @@ impl Default for SkillCache {
 
 impl SkillCache {
     pub fn new() -> Self {
+        Self::with_max_skills(MAX_SKILLS)
+    }
+
+    fn with_max_skills(max_skills: usize) -> Self {
         let mut planner = FftPlanner::<f32>::new();
         let fft_plan = planner.plan_fft_forward(FFT_SIZE);
         Self {
             skills: RwLock::new(Vec::new()),
             threshold: DEFAULT_THRESHOLD,
+            max_skills,
             filterbank: build_mel_filterbank(),
             hann_window: build_hann_window(),
             fft_plan,
@@ -87,13 +95,12 @@ impl SkillCache {
     /// Uses the first 2 seconds: Mel spectrogram → average energy → quantize → SHA-256.
     /// ~1ms on CPU, no network, no models.
     pub fn fingerprint(&self, audio: &[i16]) -> Sdr {
-        // Convert i16 to f32.
-        let f32_audio: Vec<f32> = audio.iter().map(|&s| s as f32 / 32768.0).collect();
-
-        // Pad or truncate to 2 seconds.
+        // Convert i16 → f32 directly into padded (avoids a 64 KB intermediate Vec).
         let mut padded = vec![0.0f32; FINGERPRINT_SAMPLES];
-        let copy_len = f32_audio.len().min(FINGERPRINT_SAMPLES);
-        padded[..copy_len].copy_from_slice(&f32_audio[..copy_len]);
+        let copy_len = audio.len().min(FINGERPRINT_SAMPLES);
+        for (dst, &s) in padded[..copy_len].iter_mut().zip(audio[..copy_len].iter()) {
+            *dst = s as f32 / 32768.0;
+        }
 
         let num_frames = FINGERPRINT_SAMPLES.saturating_sub(FFT_SIZE) / HOP_LENGTH + 1;
         if num_frames == 0 {
@@ -102,6 +109,8 @@ impl SkillCache {
 
         let fft = &self.fft_plan;
         let mut fft_buffer = vec![Complex::new(0.0f32, 0.0f32); FFT_SIZE];
+        // Reused across frames — hoisted to avoid 200 allocations per fingerprint call.
+        let mut power = vec![0.0f32; FREQ_BINS];
 
         // Average mel energy across all frames.
         let mut avg_mel = vec![0.0f32; MEL_BINS];
@@ -117,10 +126,9 @@ impl SkillCache {
             }
             fft.process(&mut fft_buffer);
 
-            let power: Vec<f32> = fft_buffer[..FREQ_BINS]
-                .iter()
-                .map(|c| c.norm_sqr())
-                .collect();
+            for (k, c) in fft_buffer[..FREQ_BINS].iter().enumerate() {
+                power[k] = c.norm_sqr();
+            }
 
             for (mel_idx, filter) in self.filterbank.iter().enumerate() {
                 let mut energy = 0.0f32;
@@ -164,14 +172,16 @@ impl SkillCache {
             }
             best_idx.map(|idx| {
                 let skill = &guard[idx];
-                (idx, skill.tool_name.clone(), skill.tool_args.clone(), best_sim)
+                (idx, skill.sdr, skill.tool_name.clone(), skill.tool_args.clone(), best_sim)
             })
         }; // read lock dropped
 
         // Phase 2: write lock only on hit (best-effort hit tracking).
-        if let Some((idx, tool_name, tool_args, similarity)) = best {
+        // Re-verify the skill at `idx` by SDR identity — guards against a concurrent
+        // `learn()` inserting/removing skills between the two lock acquisitions.
+        if let Some((idx, matched_sdr, tool_name, tool_args, similarity)) = best {
             let mut guard = self.skills.write().await;
-            if idx < guard.len() {
+            if guard.get(idx).map(|s| s.sdr == matched_sdr).unwrap_or(false) {
                 guard[idx].hit_count += 1;
                 guard[idx].last_used = Instant::now();
             }
@@ -182,16 +192,44 @@ impl SkillCache {
     }
 
     /// Cache a new skill after a successful tool call.
+    ///
+    /// Two-phase: read lock for the dedup scan (unblocks concurrent `match_skill`
+    /// callers), then write lock only to mutate. Final dedup re-check under write
+    /// lock guards against concurrent `learn()` inserting the same skill between
+    /// the two lock acquisitions.
     pub async fn learn(&self, audio_sdr: Sdr, label: String, tool_name: String, tool_args: JsonValue) {
+        // Phase 1: read-only dedup scan — record the matching SDR for cheap
+        // identity re-verify in Phase 2 (equality, not Hamming re-scoring).
+        let found_sdr: Option<Sdr> = {
+            let guard = self.skills.read().await;
+            guard.iter()
+                .find(|s| sdr::hamming_similarity(&audio_sdr, &s.sdr) >= self.threshold)
+                .map(|s| s.sdr)
+        }; // read lock dropped
+
         let mut guard = self.skills.write().await;
 
-        // Deduplicate near-identical skills.
-        for skill in guard.iter_mut() {
-            if sdr::hamming_similarity(&audio_sdr, &skill.sdr) >= self.threshold {
+        if let Some(matched_sdr) = found_sdr {
+            // Re-find by SDR identity under write lock (O(1) equality vs Hamming).
+            if let Some(skill) = guard.iter_mut().find(|s| s.sdr == matched_sdr) { // exact bit equality, not Hamming
                 skill.hit_count += 1;
                 skill.last_used = Instant::now();
                 tracing::debug!(tool = %tool_name, "skill cache: updated existing skill");
                 return;
+            }
+            // Skill was evicted between Phase 1 and Phase 2 — fall through to insert.
+        }
+
+        // Final dedup check: guard against a concurrent learn() that inserted
+        // the same skill after Phase 1 dropped the read lock.
+        if guard.iter().any(|s| sdr::hamming_similarity(&audio_sdr, &s.sdr) >= self.threshold) {
+            return;
+        }
+
+        // Cache at capacity — evict LRU before inserting so post-insert size stays <= max_skills.
+        if guard.len() >= self.max_skills {
+            if let Some(lru_idx) = guard.iter().enumerate().min_by_key(|(_, s)| s.last_used).map(|(i, _)| i) {
+                guard.swap_remove(lru_idx);
             }
         }
 
@@ -325,5 +363,48 @@ mod tests {
         let sdr1 = cache.fingerprint(&audio);
         let sdr2 = cache.fingerprint(&audio);
         assert_eq!(sdr1, sdr2);
+    }
+
+    /// Verify that a skill evicted by LRU is correctly re-inserted on the next learn()
+    /// call, rather than silently dropped (the eviction-race fix).
+    ///
+    /// Determinism: `sdr_a` is always the LRU when `sdr_c` triggers eviction because
+    /// `Instant::now()` is monotonic — a was inserted before b, so a.last_used < b.last_used.
+    #[tokio::test]
+    async fn evicted_skill_is_relearned() {
+        // Use well-separated frequencies to guarantee distinct SDRs (no Hamming collision).
+        let make_tone = |freq: f32| -> Vec<i16> {
+            (0..16000)
+                .map(|i| ((2.0 * std::f32::consts::PI * freq * i as f32 / 16000.0).sin() * 16000.0) as i16)
+                .collect()
+        };
+
+        // Use a tiny capacity of 2 to trigger eviction without filling 512 slots.
+        let cache = SkillCache::with_max_skills(2);
+
+        let tone_a = make_tone(200.0);
+        let tone_b = make_tone(2000.0);
+        let tone_c = make_tone(440.0);
+        let sdr_a = cache.fingerprint(&tone_a);
+        let sdr_b = cache.fingerprint(&tone_b);
+        let sdr_c = cache.fingerprint(&tone_c);
+
+        // Fill cache: a is inserted first → a.last_used < b.last_used → a is the LRU.
+        cache.learn(sdr_a, "a".into(), "tool_a".into(), serde_json::json!({})).await;
+        cache.learn(sdr_b, "b".into(), "tool_b".into(), serde_json::json!({})).await;
+        assert_eq!(cache.len().await, 2);
+
+        // Inserting c evicts a (the LRU). Cache now holds {b, c}.
+        cache.learn(sdr_c, "c".into(), "tool_c".into(), serde_json::json!({})).await;
+        assert_eq!(cache.len().await, 2);
+        assert!(cache.match_skill(&sdr_c).await.is_some(), "c must be cached");
+        assert!(cache.match_skill(&sdr_b).await.is_some(), "b must still be cached");
+
+        // Re-learn a — it was evicted, so it must be re-inserted (not silently dropped).
+        cache.learn(sdr_a, "a".into(), "tool_a".into(), serde_json::json!({})).await;
+        assert_eq!(cache.len().await, 2);
+        let hit = cache.match_skill(&sdr_a).await;
+        assert!(hit.is_some(), "evicted skill a must be re-insertable after LRU eviction");
+        assert_eq!(hit.unwrap().tool_name, "tool_a");
     }
 }

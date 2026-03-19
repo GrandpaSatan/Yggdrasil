@@ -33,6 +33,8 @@ All commands and endpoints for running, deploying, and operating the Yggdrasil A
 | `POST` | `/api/v1/references` | Proxy to Muninn: find references. Body: `{symbol, language?, limit?}` |
 | `POST` | `/api/v1/notify` | Send HA notification. Body: `{title, message, target?}` |
 | `POST` | `/api/v1/webhook` | Home Assistant webhook receiver |
+| `GET`  | `/v1/voice` | Voice WebSocket endpoint. Upgrade to WebSocket; stream PCM s16le audio (16 kHz mono) as binary frames. Server sends JSON control frames and TTS audio back. See [Voice WebSocket Pipeline](ARCHITECTURE.md#data-flow-voice-websocket-pipeline-odin) for full protocol. |
+| `GET`  | `/voice` | Embedded browser voice UI (HTML page) |
 | `GET`  | `/health` | Health check (always HTTP 200, status in body) |
 | `GET`  | `/metrics` | Prometheus text metrics |
 
