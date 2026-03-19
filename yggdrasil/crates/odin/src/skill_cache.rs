@@ -112,8 +112,9 @@ impl SkillCache {
         // Reused across frames — hoisted to avoid 200 allocations per fingerprint call.
         let mut power = vec![0.0f32; FREQ_BINS];
 
-        // Average mel energy across all frames.
-        let mut avg_mel = vec![0.0f32; MEL_BINS];
+        // Average mel energy across all frames. Stack-allocated (MEL_BINS=80, 320 B)
+        // to avoid a heap allocation in the fingerprinting hot path.
+        let mut avg_mel = [0.0f32; MEL_BINS];
 
         for frame_idx in 0..num_frames {
             let start = frame_idx * HOP_LENGTH;
@@ -141,7 +142,7 @@ impl SkillCache {
 
         // Quantize to u8 and hash.
         let scale = 1.0 / num_frames as f32;
-        let mut quantized = vec![0u8; MEL_BINS];
+        let mut quantized = [0u8; MEL_BINS];
         for i in 0..MEL_BINS {
             let log_val = (avg_mel[i] * scale).max(1e-10).log10();
             let normalized = ((log_val + 10.0) / 12.0).clamp(0.0, 1.0);
@@ -406,5 +407,31 @@ mod tests {
         let hit = cache.match_skill(&sdr_a).await;
         assert!(hit.is_some(), "evicted skill a must be re-insertable after LRU eviction");
         assert_eq!(hit.unwrap().tool_name, "tool_a");
+    }
+
+    /// Verify LRU eviction works at the minimum valid capacity (1 slot).
+    /// Every insert after the first must evict the previous occupant.
+    #[tokio::test]
+    async fn eviction_at_capacity_one() {
+        let make_tone = |freq: f32| -> Vec<i16> {
+            (0..16000)
+                .map(|i| ((2.0 * std::f32::consts::PI * freq * i as f32 / 16000.0).sin() * 16000.0) as i16)
+                .collect()
+        };
+
+        let cache = SkillCache::with_max_skills(1);
+        let tone_a = make_tone(300.0);
+        let tone_b = make_tone(3000.0);
+        let sdr_a = cache.fingerprint(&tone_a);
+        let sdr_b = cache.fingerprint(&tone_b);
+
+        cache.learn(sdr_a, "a".into(), "tool_a".into(), serde_json::json!({})).await;
+        assert_eq!(cache.len().await, 1);
+
+        // Inserting b must evict a so capacity stays at 1.
+        cache.learn(sdr_b, "b".into(), "tool_b".into(), serde_json::json!({})).await;
+        assert_eq!(cache.len().await, 1, "capacity must not exceed 1");
+        assert!(cache.match_skill(&sdr_b).await.is_some(), "b must be cached");
+        assert!(cache.match_skill(&sdr_a).await.is_none(), "a must have been evicted");
     }
 }

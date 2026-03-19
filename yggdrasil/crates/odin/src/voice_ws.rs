@@ -99,7 +99,8 @@ async fn handle_voice_session(mut socket: WebSocket, state: AppState) {
     let mut vad_state = VadState::Idle;
     let mut silence_frames: u32 = 0;
     let mut speech_start_sample: usize = 0;
-    // Prevent duplicate session resume: only honour the first resume message.
+    // Only honour the first *successful* session resume (valid session_id found in store).
+    // A failed resume attempt (unknown session_id) leaves this false so the client can retry.
     let mut seen_resume = false;
 
     loop {
