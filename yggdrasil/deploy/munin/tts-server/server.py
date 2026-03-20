@@ -1,9 +1,8 @@
 """Kokoro TTS Server — FastAPI wrapper for kokoro-onnx"""
 
-import io
 import time
 import logging
-import soundfile as sf
+import numpy as np
 from fastapi import FastAPI
 from fastapi.responses import Response
 from pydantic import BaseModel
@@ -36,11 +35,15 @@ async def health():
 async def tts(req: TTSRequest):
     t0 = time.time()
     audio, sr = kokoro.create(req.text, voice=req.voice, speed=req.speed)
-    buf = io.BytesIO()
-    sf.write(buf, audio, sr, format="WAV")
+    # Convert float32 → int16 PCM (what Odin + browser client expect).
+    pcm_int16 = (np.clip(audio, -1.0, 1.0) * 32767).astype(np.int16)
     elapsed = time.time() - t0
-    log.info("synthesized in %.2fs: %s", elapsed, req.text[:60])
-    return Response(content=buf.getvalue(), media_type="audio/wav")
+    log.info("synthesized in %.2fs (%d samples, %dHz): %s", elapsed, len(pcm_int16), sr, req.text[:60])
+    return Response(
+        content=pcm_int16.tobytes(),
+        media_type="application/octet-stream",
+        headers={"x-sample-rate": str(sr)},
+    )
 
 if __name__ == "__main__":
     import uvicorn

@@ -375,22 +375,6 @@
   var micActive       = false;
   var isSpeaking      = false;
 
-  // ── Client-side noise gate ────────────────────────────────────
-  // Tracks ambient noise floor and only streams audio when energy
-  // exceeds it by a margin. This prevents streaming silence/noise
-  // to the server, saving bandwidth. The server SDR pipeline does
-  // the real speech-vs-noise classification.
-  var NOISE_FLOOR_ALPHA   = 0.01;  // slow smoothing — adapts over seconds, not frames
-  var NOISE_GATE_MARGIN   = 1.5;   // speech must be 1.5x above ambient to start
-  var NOISE_FLOOR_MIN     = 0.002; // minimum noise floor (prevents 0)
-  var NOISE_FLOOR_MAX     = 0.05;  // cap noise floor so speech always has a chance
-  var noiseFloor          = 0.008; // initial estimate
-  var clientSpeechActive  = false;
-  var clientSilenceFrames = 0;
-  var CLIENT_SILENCE_MAX  = 8;     // ~8 frames back at ambient → end of speech
-  var speechPeakEnergy    = 0;     // tracks peak energy during current utterance
-  var SPEECH_DROP_RATIO   = 0.3;   // end speech when energy drops to 30% of peak
-
   function rmsEnergy(samples) {
     var sum = 0;
     for (var i = 0; i < samples.length; i++) {
@@ -531,9 +515,7 @@
 
         case 'audio_end':
           playAudio();
-          isSpeaking = false;
-          setOrbState('idle');
-          setConnStatus('connected', 'connected');
+          // isSpeaking, orbState, connStatus reset by src.onended in playAudio()
           break;
 
         case 'alert':
@@ -552,7 +534,12 @@
 
   // ── Audio playback ────────────────────────────────────────────
   function playAudio() {
-    if (audioChunks.length === 0) return;
+    if (audioChunks.length === 0) {
+      isSpeaking = false;
+      setOrbState('idle');
+      setConnStatus('connected', 'connected');
+      return;
+    }
 
     var total = 0;
     audioChunks.forEach(function (c) { total += c.length; });
@@ -574,6 +561,11 @@
     var src = playbackCtx.createBufferSource();
     src.buffer = buf;
     src.connect(playbackCtx.destination);
+    src.onended = function () {
+      isSpeaking = false;
+      setOrbState('idle');
+      setConnStatus('connected', 'connected');
+    };
     src.start();
   }
 
@@ -649,8 +641,6 @@
 
   function stopMic() {
     micActive = false;
-    clientSpeechActive = false;
-    clientSilenceFrames = 0;
     if (scriptNode)  { scriptNode.disconnect(); scriptNode = null; }
     if (audioCtx)    { audioCtx.close().catch(function () {}); audioCtx = null; }
     if (mediaStream) { mediaStream.getTracks().forEach(function (t) { t.stop(); }); mediaStream = null; }

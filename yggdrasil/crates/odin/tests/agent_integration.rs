@@ -137,6 +137,7 @@ fn test_state(_ollama_url: &str, mimir_url: &str) -> AppState {
         tool_registry: Arc::new(build_registry()),
         gaming_config: None,
         skill_cache: Arc::new(odin::skill_cache::SkillCache::new()),
+        voice_alert_tx: tokio::sync::broadcast::channel::<String>(16).0,
     }
 }
 

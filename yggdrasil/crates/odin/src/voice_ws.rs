@@ -801,7 +801,10 @@ async fn call_stt(
 /// Call ygg-voice `POST /api/v1/tts` with a JSON text payload.
 ///
 /// Returns `(pcm_bytes, sample_rate)` on success.  The sample rate is read from
-/// the `x-sample-rate` response header, defaulting to 24 000 Hz.
+/// the `x-sample-rate` response header.  If the response is a WAV file (RIFF
+/// header detected), the raw PCM data is extracted and 32-bit float samples are
+/// converted to 16-bit integer — this handles backward compatibility with TTS
+/// servers that return WAV instead of raw PCM.
 async fn call_tts(
     client: &reqwest::Client,
     base_url: &str,
@@ -818,19 +821,81 @@ async fn call_tts(
         return Err(format!("TTS returned {}", resp.status()));
     }
 
-    let sample_rate: u32 = resp
+    // Read sample rate from header (preferred source).
+    let header_sample_rate: Option<u32> = resp
         .headers()
         .get("x-sample-rate")
         .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(24_000);
+        .and_then(|s| s.parse().ok());
 
-    let bytes = resp
+    let raw_bytes = resp
         .bytes()
         .await
         .map_err(|e| format!("TTS body failed: {e}"))?;
 
-    Ok((bytes.to_vec(), sample_rate))
+    // Detect WAV format (RIFF header) and extract raw PCM data + sample rate.
+    let (pcm_bytes, sample_rate) = if raw_bytes.len() > 44
+        && raw_bytes[..4] == *b"RIFF"
+        && raw_bytes[8..12] == *b"WAVE"
+    {
+        let wav_sample_rate = u32::from_le_bytes([
+            raw_bytes[24], raw_bytes[25], raw_bytes[26], raw_bytes[27],
+        ]);
+        let bits_per_sample = u16::from_le_bytes([raw_bytes[34], raw_bytes[35]]);
+
+        // Find the "data" chunk — usually at offset 36 but can vary.
+        let data_offset = find_wav_data_chunk(&raw_bytes).unwrap_or(44);
+        let pcm_data = &raw_bytes[data_offset..];
+
+        // If WAV contains 32-bit float samples, convert to 16-bit integer PCM.
+        let pcm_i16 = if bits_per_sample == 32 {
+            convert_f32_to_i16_pcm(pcm_data)
+        } else {
+            pcm_data.to_vec()
+        };
+
+        let sr = header_sample_rate.unwrap_or(wav_sample_rate);
+        tracing::debug!(
+            wav_sr = wav_sample_rate,
+            bits = bits_per_sample,
+            data_offset,
+            pcm_len = pcm_i16.len(),
+            "parsed WAV response from TTS"
+        );
+        (pcm_i16, sr)
+    } else {
+        // Raw PCM — use as-is.
+        (raw_bytes.to_vec(), header_sample_rate.unwrap_or(24_000))
+    };
+
+    Ok((pcm_bytes, sample_rate))
+}
+
+/// Find the byte offset of the "data" chunk payload in a WAV file.
+fn find_wav_data_chunk(wav: &[u8]) -> Option<usize> {
+    let mut pos = 12; // skip RIFF + file-size + WAVE
+    while pos + 8 <= wav.len() {
+        let chunk_size = u32::from_le_bytes([
+            wav[pos + 4], wav[pos + 5], wav[pos + 6], wav[pos + 7],
+        ]) as usize;
+        if &wav[pos..pos + 4] == b"data" {
+            return Some(pos + 8);
+        }
+        pos += 8 + chunk_size;
+    }
+    None
+}
+
+/// Convert 32-bit IEEE-754 float PCM samples to 16-bit integer PCM (little-endian).
+fn convert_f32_to_i16_pcm(float_bytes: &[u8]) -> Vec<u8> {
+    float_bytes
+        .chunks_exact(4)
+        .flat_map(|chunk| {
+            let f = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+            let i = (f.clamp(-1.0, 1.0) * 32767.0) as i16;
+            i.to_le_bytes()
+        })
+        .collect()
 }
 
 // ─────────────────────────────────────────────────────────────────
