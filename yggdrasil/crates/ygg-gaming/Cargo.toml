@@ -1,0 +1,23 @@
+[package]
+name = "ygg-gaming"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "ygg_gaming"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ygg-gaming"
+path = "src/main.rs"
+
+[dependencies]
+ygg-energy = { path = "../ygg-energy" }
+clap = { version = "4", features = ["derive", "env"] }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+thiserror = { workspace = true }

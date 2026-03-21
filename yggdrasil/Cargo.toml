@@ -1,0 +1,129 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/ygg-domain",
+    "crates/ygg-config",
+    "crates/ygg-store",
+    "crates/ygg-embed",
+    "crates/odin",
+    "crates/mimir",
+    "crates/huginn",
+    "crates/muninn",
+    "crates/ygg-mcp",
+    "crates/ygg-ha",
+    "crates/ygg-mcp-server",
+    "crates/ygg-mcp-remote",
+    "crates/ygg-mesh",
+    "crates/ygg-node",
+    "crates/ygg-cloud",
+    "crates/ygg-energy",
+    "crates/ygg-sentinel",
+    "crates/ygg-installer",
+    "crates/ygg-voice",
+    "crates/ygg-gaming",
+]
+
+[workspace.package]
+version = "1.0.0"
+edition = "2024"
+authors = ["Jesus Hernandez"]
+license = "BSL-1.1"
+description = "Distributed AI memory, code indexing, and retrieval system for local-first AI development"
+repository = "https://github.com/GrandpaSatan/yggdrasil"
+homepage = "https://github.com/GrandpaSatan/yggdrasil"
+keywords = ["ai", "memory", "code-indexing", "mcp", "rag"]
+categories = ["development-tools", "command-line-utilities"]
+
+[workspace.dependencies]
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Database
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "chrono", "json"] }
+
+# HTTP
+axum = { version = "0.8", features = ["ws"] }
+tower = { version = "0.5", features = ["limit", "timeout"] }
+tower-http = { version = "0.6", features = ["cors"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"], default-features = false }
+
+# Utilities
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive", "env"] }
+
+# Hashing
+sha2 = "0.10"
+
+# Random number generation
+rand = "0.8"
+
+# Concurrent collections
+dashmap = "6"
+
+# Config
+toml = "0.8"
+
+# Async utilities
+futures = "0.3"
+async-trait = "0.1"
+
+# File watching
+notify = "7"
+
+# Code parsing
+tree-sitter = "0.25"
+
+# Directory traversal
+walkdir = "2"
+
+# Qdrant
+qdrant-client = "1"
+
+# ONNX Runtime (in-process ML inference for SDR encoding)
+# Pin to the latest RC — no stable 2.x release exists on crates.io yet.
+# load-dynamic: loads libonnxruntime.so at runtime instead of static linking
+# (avoids glibc version mismatch with pre-built static binaries).
+ort = { version = "=2.0.0-rc.12", features = ["load-dynamic"] }
+tokenizers = "0.20"
+ndarray = "0.17"
+
+# MCP
+rmcp = { version = "1.2", features = ["server", "transport-io"] }
+
+# Headless browser (screenshot tool)
+chromiumoxide = "0.9"
+
+# Cancellation
+tokio-util = "0.7"
+# schemars 1.x is required by rmcp 1.1 (rmcp re-exports it as rmcp::schemars).
+schemars = "1"
+
+# Metrics
+metrics = "0.24"
+metrics-exporter-prometheus = "0.16"
+
+# Systemd notification
+sd-notify = "0.4"
+
+# Base64 encoding
+base64 = "0.22"
+
+# Audio capture/playback
+cpal = "0.15"
+hound = "3.5"
+rustfft = "6"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

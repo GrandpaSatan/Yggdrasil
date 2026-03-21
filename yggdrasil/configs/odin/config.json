@@ -1,0 +1,89 @@
+{
+  "node_name": "odin",
+  "listen_addr": "0.0.0.0:8080",
+  "backends": [
+    {
+      "name": "munin-cpu",
+      "url": "http://localhost:11435",
+      "backend_type": "ollama",
+      "models": ["qwen3.5:4b"],
+      "max_concurrent": 2,
+      "context_window": 16384
+    },
+    {
+      "name": "hugin",
+      "url": "http://${HUGIN_IP}:11434",
+      "backend_type": "ollama",
+      "models": ["qwen3-coder:30b-a3b-q4_K_M"],
+      "max_concurrent": 2,
+      "context_window": 32768
+    }
+  ],
+  "routing": {
+    "default_model": "qwen3.5:4b",
+    "default_backend": "munin-cpu",
+    "rules": [
+      {
+        "intent": "coding",
+        "model": "qwen3-coder:30b-a3b-q4_K_M",
+        "backend": "hugin"
+      },
+      {
+        "intent": "home_automation",
+        "model": "qwen3.5:4b",
+        "backend": "munin-cpu"
+      }
+    ]
+  },
+  "agent": {
+    "max_iterations": 5,
+    "max_tool_calls_total": 10,
+    "tool_timeout_secs": 15,
+    "total_timeout_secs": 420,
+    "default_tiers": ["safe", "restricted"]
+  },
+  "mimir": {
+    "url": "http://localhost:9090",
+    "query_limit": 3,
+    "store_on_completion": true
+  },
+  "muninn": {
+    "url": "http://${HUGIN_IP}:9091",
+    "max_context_chunks": 10
+  },
+  "session": {
+    "max_sessions": 256,
+    "session_ttl_secs": 3600,
+    "context_budget_tokens": 14000,
+    "generation_reserve": 2048
+  },
+  "task_worker": {
+    "enabled": true,
+    "poll_interval_secs": 30,
+    "agent_name": "fergus",
+    "model": "qwen3.5:4b"
+  },
+  "ha": {
+    "url": "http://${CHIRP_IP}:8123",
+    "token": "${HA_TOKEN}",
+    "timeout_secs": 10
+  },
+  "cloud": {
+    "fallback_enabled": true,
+    "openai": {
+      "api_key": "${OPENAI_API_KEY}",
+      "default_model": "gpt-4o-mini",
+      "requests_per_minute": 60
+    },
+    "claude": {
+      "api_key": "${ANTHROPIC_API_KEY}",
+      "default_model": "claude-sonnet-4-6",
+      "requests_per_minute": 40
+    },
+    "gemini": {
+      "api_key": "${GEMINI_API_KEY}",
+      "default_model": "gemini-2.5-flash",
+      "requests_per_minute": 60
+    }
+  }
+}

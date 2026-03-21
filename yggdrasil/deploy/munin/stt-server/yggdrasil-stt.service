@@ -1,0 +1,18 @@
+[Unit]
+Description=Yggdrasil SenseVoice STT Server
+After=network.target
+Before=yggdrasil-odin.service
+
+[Service]
+Type=simple
+User=yggdrasil
+Group=yggdrasil
+WorkingDirectory=/opt/yggdrasil/deploy/munin/stt-server
+ExecStart=/usr/bin/python3 server.py
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=120
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
