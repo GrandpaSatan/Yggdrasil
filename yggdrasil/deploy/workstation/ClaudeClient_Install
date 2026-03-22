@@ -312,6 +312,32 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════════════════════
+# Step 8: Config sync bootstrap (if central config exists on Munin)
+# ═══════════════════════════════════════════════════════════════════════
+SYNC_SCRIPT="$SCRIPT_DIR/claude-config-sync.sh"
+REMOTE_HOST="${MUNIN_IP:-<munin-ip>}"
+REMOTE_USER_SSH="${DEPLOY_USER:-yggdrasil}"
+
+if [[ -x "$SYNC_SCRIPT" ]]; then
+    log "Checking for centralized config on Munin..."
+    if ssh -o ConnectTimeout=3 -o BatchMode=yes "$REMOTE_USER_SSH@$REMOTE_HOST" \
+        "test -d /opt/yggdrasil/claude-config/agents" 2>/dev/null; then
+        ok "Central config found on Munin"
+        if [[ -d "$CLAUDE_DIR/.sync-cache" ]]; then
+            log "Sync cache exists — running sync..."
+            "$SYNC_SCRIPT" sync
+        else
+            log "First time — bootstrapping from central config..."
+            "$SYNC_SCRIPT" bootstrap
+        fi
+    else
+        warn "No central config on Munin (run 'claude-config-sync.sh init' to set up)"
+    fi
+else
+    warn "claude-config-sync.sh not found — skipping config sync"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════
 # Summary
 # ═══════════════════════════════════════════════════════════════════════
 echo ""

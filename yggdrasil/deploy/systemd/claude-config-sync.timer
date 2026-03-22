@@ -1,0 +1,10 @@
+[Unit]
+Description=Claude Code Config Sync Timer
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

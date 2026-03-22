@@ -338,6 +338,41 @@ Write-Host "  Memory:      $memoryFile"
 Write-Host ""
 Write-Host "  Restart Claude Code to pick up the new MCP configuration."
 Write-Host ""
+# ═══════════════════════════════════════════════════════════════════════
+# Step 8: Config sync bootstrap (if central config exists on Munin)
+# ═══════════════════════════════════════════════════════════════════════
+$syncScript = Join-Path $SCRIPT_DIR "claude-config-sync.ps1"
+$remoteHostIP = if ($env:MUNIN_IP) { $env:MUNIN_IP } else { "<munin-ip>" }
+$remoteUserSSH = if ($env:DEPLOY_USER) { $env:DEPLOY_USER } else { "yggdrasil" }
+
+if (Test-Path $syncScript) {
+    Log "Checking for centralized config on Munin..."
+    try {
+        $hasConfig = & ssh -o ConnectTimeout=3 -o BatchMode=yes "$remoteUserSSH@$remoteHostIP" "test -d /opt/yggdrasil/claude-config/agents && echo yes" 2>&1
+        if ($hasConfig -eq "yes") {
+            Ok "Central config found on Munin"
+            $syncCache = Join-Path $CLAUDE_DIR ".sync-cache"
+            if (Test-Path $syncCache) {
+                Log "Sync cache exists - running sync..."
+                & $syncScript sync
+            } else {
+                Log "First time - bootstrapping from central config..."
+                & $syncScript bootstrap
+            }
+        } else {
+            Warn "No central config on Munin (run 'claude-config-sync.ps1 init' to set up)"
+        }
+    } catch {
+        Warn "Could not check Munin for central config (SSH not available?)"
+    }
+} else {
+    Warn "claude-config-sync.ps1 not found - skipping config sync"
+}
+
+Write-Host ""
+Log "Installation complete!"
+Write-Host ""
+
 Write-Host "  NOTE: If this is a fresh Windows install, you may need:" -ForegroundColor Yellow
 Write-Host "    - Visual Studio Build Tools (C++ workload) for Rust compilation" -ForegroundColor Yellow
 Write-Host "    - OpenSSL: winget install ShiningLight.OpenSSL" -ForegroundColor Yellow
