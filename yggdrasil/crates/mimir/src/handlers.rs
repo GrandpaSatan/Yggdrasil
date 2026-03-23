@@ -18,6 +18,29 @@ use ygg_store::postgres::engrams;
 
 use crate::{error::MimirError, sdr, state::AppState};
 
+/// SHA-256 hash of `cause + "\n" + effect` for engram content dedup in PG.
+pub fn engram_content_hash(cause: &str, effect: &str) -> Vec<u8> {
+    let mut hasher = Sha256::new();
+    hasher.update(cause.as_bytes());
+    hasher.update(b"\n");
+    hasher.update(effect.as_bytes());
+    hasher.finalize().to_vec()
+}
+
+/// Helper to build a skip response for auto-ingest.
+fn auto_ingest_skip(reason: &str) -> (StatusCode, Json<AutoIngestResponse>) {
+    (
+        StatusCode::OK,
+        Json(AutoIngestResponse {
+            stored: false,
+            engram_id: None,
+            matched_template: None,
+            similarity: None,
+            skipped_reason: Some(reason.into()),
+        }),
+    )
+}
+
 // ---------------------------------------------------------------------------
 // GET /health
 // ---------------------------------------------------------------------------
@@ -82,13 +105,7 @@ pub async fn store_engram(
     }
 
     // Step 2: SHA-256 content hash
-    let content_hash: Vec<u8> = {
-        let mut hasher = Sha256::new();
-        hasher.update(body.cause.as_bytes());
-        hasher.update(b"\n");
-        hasher.update(body.effect.as_bytes());
-        hasher.finalize().to_vec()
-    };
+    let content_hash = engram_content_hash(&body.cause, &body.effect);
 
     // Step 3: Embed cause text via ONNX (sync — must use spawn_blocking)
     let embedder = state.embedder.clone();
@@ -890,7 +907,7 @@ fn parse_tier(s: &str) -> MemoryTier {
 /// If the text is shorter than `max_chars`, returns it as-is.
 /// Otherwise trims to the last whitespace before the limit, or hard-cuts if no
 /// whitespace is found within the limit.
-fn truncate_to_word_boundary(text: &str, max_chars: usize) -> String {
+pub fn truncate_to_word_boundary(text: &str, max_chars: usize) -> String {
     if text.len() <= max_chars {
         return text.to_string();
     }
@@ -1516,10 +1533,11 @@ pub async fn graph_traverse(
 
 /// Autonomous memory ingest endpoint.
 ///
-/// SDR-encodes incoming content, compares against pre-loaded insight template SDRs
-/// via Hamming similarity, and auto-generates a cause/effect engram when the best
-/// match meets the configured threshold. Designed to be called by PostToolUse hook
-/// scripts with near-zero blocking time (fire-and-forget from the hook side).
+/// Embeds incoming content via ONNX, compares against pre-loaded dense template
+/// embeddings via cosine similarity (dot product on L2-normalized vectors), and
+/// auto-generates a cause/effect engram when the best match meets the configured
+/// threshold. Designed to be called by PostToolUse hook scripts with near-zero
+/// blocking time (fire-and-forget from the hook side).
 ///
 /// Pipeline:
 /// 1. Validate content non-empty
@@ -1527,26 +1545,16 @@ pub async fn graph_traverse(
 /// 3. Per-workstation cooldown gate
 /// 4. SHA-256 content dedup gate
 /// 5. Truncate to max_content_length
-/// 6. ONNX embed → binarize → 256-bit SDR
-/// 7. Scan template_sdrs: compute Hamming similarity against each template
-/// 8. If best match >= threshold: store engram (PG + SDR index + Qdrant), update maps
-/// 9. Return AutoIngestResponse
+/// 6. ONNX embed (384-dim, L2-normalized)
+/// 7. Dense cosine template matching + binarize to SDR for storage
+/// 8. If best match >= threshold: store engram (PG + SDR index + Qdrant), spawn Saga enrichment
 pub async fn auto_ingest(
     State(state): State<Arc<AppState>>,
     Json(body): Json<AutoIngestRequest>,
 ) -> Result<(StatusCode, Json<AutoIngestResponse>), MimirError> {
     // Step 1: Validate content non-empty
     if body.content.trim().is_empty() {
-        return Ok((
-            StatusCode::OK,
-            Json(AutoIngestResponse {
-                stored: false,
-                engram_id: None,
-                matched_template: None,
-                similarity: None,
-                skipped_reason: Some("empty_content".into()),
-            }),
-        ));
+        return Ok(auto_ingest_skip("empty_content"));
     }
 
     // Step 2: Check enabled flag (default: true when config absent)
@@ -1558,58 +1566,21 @@ pub async fn auto_ingest(
     let dedup_window_secs = cfg.map(|c| c.dedup_window_secs).unwrap_or(300);
 
     if !enabled {
-        return Ok((
-            StatusCode::OK,
-            Json(AutoIngestResponse {
-                stored: false,
-                engram_id: None,
-                matched_template: None,
-                similarity: None,
-                skipped_reason: Some("disabled".into()),
-            }),
-        ));
+        return Ok(auto_ingest_skip("disabled"));
     }
 
     // Step 3: Per-workstation cooldown check
     if let Some(entry) = state.cooldown_map.get(&body.workstation) {
         if entry.value().elapsed().as_secs() < cooldown_secs {
-            return Ok((
-                StatusCode::OK,
-                Json(AutoIngestResponse {
-                    stored: false,
-                    engram_id: None,
-                    matched_template: None,
-                    similarity: None,
-                    skipped_reason: Some("cooldown".into()),
-                }),
-            ));
+            return Ok(auto_ingest_skip("cooldown"));
         }
     }
 
     // Step 4: SHA-256 hash content, check dedup window
-    let content_hash_hex = {
-        use std::fmt::Write;
-        let mut hasher = Sha256::new();
-        hasher.update(body.content.as_bytes());
-        let result = hasher.finalize();
-        let mut hex = String::with_capacity(64);
-        for b in result.iter() {
-            let _ = write!(hex, "{b:02x}");
-        }
-        hex
-    };
+    let content_hash_hex = format!("{:x}", Sha256::digest(body.content.as_bytes()));
     if let Some(entry) = state.content_hashes.get(&content_hash_hex) {
         if entry.value().elapsed().as_secs() < dedup_window_secs {
-            return Ok((
-                StatusCode::OK,
-                Json(AutoIngestResponse {
-                    stored: false,
-                    engram_id: None,
-                    matched_template: None,
-                    similarity: None,
-                    skipped_reason: Some("duplicate".into()),
-                }),
-            ));
+            return Ok(auto_ingest_skip("duplicate"));
         }
     }
 
@@ -1649,24 +1620,18 @@ pub async fn auto_ingest(
     // Step 7b: Binarize → 256-bit SDR (still needed for engram storage path)
     let sdr_val = sdr::binarize(&embedding[..sdr::SDR_BITS]);
 
-    // Step 9: Store engram if best match meets threshold
+    // Step 8: Store engram if best match meets threshold
     if best_sim >= threshold {
         if let Some(matched_name) = best_name {
-            let cause = format!("{}: {}", matched_name, &content[..content.len().min(200)]);
+            let cause_snippet: String = content.chars().take(200).collect();
+            let effect_snippet: String = content.chars().take(500).collect();
+            let cause = format!("{}: {}", matched_name, cause_snippet);
             let effect = format!(
                 "[auto:{}@{}] {}",
-                body.source,
-                body.workstation,
-                &content[..content.len().min(500)]
+                body.source, body.workstation, effect_snippet
             );
             let sdr_bytes = sdr::to_bytes(&sdr_val);
-            let pg_content_hash: Vec<u8> = {
-                let mut hasher = Sha256::new();
-                hasher.update(cause.as_bytes());
-                hasher.update(b"\n");
-                hasher.update(effect.as_bytes());
-                hasher.finalize().to_vec()
-            };
+            let pg_content_hash = engram_content_hash(&cause, &effect);
             let trigger_label = truncate_to_word_boundary(&cause, 80);
             let tags = vec![
                 "auto_ingest".to_string(),
@@ -1747,7 +1712,7 @@ pub async fn auto_ingest(
         }
     }
 
-    // Step 10: Below threshold — return without storing
+    // Step 9: Below threshold — return without storing
     Ok((
         StatusCode::OK,
         Json(AutoIngestResponse {

@@ -27,7 +27,6 @@
 //! Tokio task and is I/O-bound (PG queries + Odin HTTP call). Peak RSS < 2MB
 //! per cycle (batch of 100 engrams ~50KB text + prompt ~60KB).
 
-use sha2::{Digest, Sha256};
 use tokio::sync::watch;
 use uuid::Uuid;
 
@@ -252,13 +251,7 @@ impl SummarizationService {
                 .await?;
 
         // --- Step 5: Compute content hash and embedding for the summary ---
-        let content_hash: Vec<u8> = {
-            let mut hasher = Sha256::new();
-            hasher.update(summary_cause.as_bytes());
-            hasher.update(b"\n");
-            hasher.update(summary_effect.as_bytes());
-            hasher.finalize().to_vec()
-        };
+        let content_hash = crate::handlers::engram_content_hash(&summary_cause, &summary_effect);
 
         // OnnxEmbedder::embed is synchronous — run on the blocking thread pool.
         let embedder = self.embedder.clone();

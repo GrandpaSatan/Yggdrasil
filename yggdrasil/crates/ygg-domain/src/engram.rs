@@ -162,8 +162,8 @@ pub struct RecallResponse {
 /// Request for the autonomous memory ingest endpoint (`POST /api/v1/auto-ingest`).
 ///
 /// Hook scripts send this after every Edit/Write/Bash tool invocation.
-/// Mimir SDR-encodes the content, matches against insight templates, and stores
-/// an engram only when the Hamming similarity exceeds the configured threshold.
+/// Mimir embeds the content and matches against dense template embeddings via
+/// cosine similarity. Stores an engram only when the best match exceeds the threshold.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AutoIngestRequest {
     /// Text to classify and potentially store.
@@ -193,7 +193,7 @@ pub struct AutoIngestResponse {
     /// Name of the insight template that matched, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub matched_template: Option<String>,
-    /// Hamming similarity score against the matched template.
+    /// Cosine similarity score against the matched template.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub similarity: Option<f64>,
     /// Why the engram was not stored, e.g. "below_threshold", "duplicate", "cooldown".

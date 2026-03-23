@@ -49,6 +49,9 @@ pub struct AppState {
     /// Loaded at startup alongside SDR templates. Preserves full magnitude information
     /// that SDR binarization discards, yielding much better classification accuracy.
     pub template_embeddings: Arc<std::sync::RwLock<Vec<(String, Vec<f32>)>>>,
+    /// Shared HTTP client for outbound requests (Saga enrichment, etc.).
+    /// Reuses connection pool across all fire-and-forget tasks.
+    pub http_client: reqwest::Client,
 }
 
 impl AppState {
@@ -132,6 +135,11 @@ impl AppState {
         let template_sdrs = Arc::new(std::sync::RwLock::new(Vec::<(String, Sdr)>::new()));
         let template_embeddings = Arc::new(std::sync::RwLock::new(Vec::<(String, Vec<f32>)>::new()));
 
+        let http_client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|e| MimirError::Internal(format!("failed to build HTTP client: {e}")))?;
+
         Ok(Self {
             store,
             vectors,
@@ -143,6 +151,7 @@ impl AppState {
             content_hashes,
             template_sdrs,
             template_embeddings,
+            http_client,
         })
     }
 }

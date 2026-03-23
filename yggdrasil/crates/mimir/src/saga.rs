@@ -21,12 +21,12 @@
 use std::sync::Arc;
 
 use serde::Deserialize;
-use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use ygg_domain::config::SagaEnrichConfig;
 use ygg_store::postgres::engrams;
 
+use crate::handlers::{engram_content_hash, truncate_to_word_boundary};
 use crate::{sdr, state::AppState};
 
 /// Saga CLASSIFY response.
@@ -34,7 +34,6 @@ use crate::{sdr, state::AppState};
 struct ClassifyResponse {
     category: String,
     should_store: bool,
-    #[allow(dead_code)]
     #[serde(default)]
     confidence: f64,
 }
@@ -136,24 +135,15 @@ pub async fn enrich_engram(
         _ => return,
     };
 
-    let http = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(saga_cfg.timeout_secs))
-        .build()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::warn!(error = %e, "saga: failed to build HTTP client");
-            return;
-        }
-    };
+    let http = &state.http_client;
 
     let file = file_path.as_deref().unwrap_or("");
-    let content_truncated = &content[..content.len().min(2000)];
+    let content_truncated: String = content.chars().take(2000).collect();
 
     // --- Step 1: CLASSIFY ---
     let classify_prompt = format!(
         "CLASSIFY\ntool: {}\nfile: {}\ncontent: {}",
-        source, file, content_truncated
+        source, file, &content_truncated
     );
 
     let mut saga_category = original_category.clone();
@@ -212,7 +202,7 @@ pub async fn enrich_engram(
     // --- Step 2: DISTILL ---
     let distill_prompt = format!(
         "DISTILL\ntool: {}\nfile: {}\ncontent: {}",
-        source, file, content_truncated
+        source, file, &content_truncated
     );
 
     match ollama_generate(&http, &saga_cfg, &distill_prompt).await {
@@ -237,13 +227,7 @@ pub async fn enrich_engram(
 
                         let sdr_val = sdr::binarize(&embedding[..sdr::SDR_BITS]);
                         let sdr_bytes = sdr::to_bytes(&sdr_val);
-                        let content_hash: Vec<u8> = {
-                            let mut hasher = Sha256::new();
-                            hasher.update(result.cause.as_bytes());
-                            hasher.update(b"\n");
-                            hasher.update(result.effect.as_bytes());
-                            hasher.finalize().to_vec()
-                        };
+                        let content_hash = engram_content_hash(&result.cause, &result.effect);
 
                         // Build enriched tags: keep auto_ingest + workstation, use saga category
                         let mut tags: Vec<String> = vec![
@@ -257,11 +241,7 @@ pub async fn enrich_engram(
                             }
                         }
 
-                        let trigger_label = if result.cause.len() > 80 {
-                            format!("{}...", &result.cause[..77])
-                        } else {
-                            result.cause.clone()
-                        };
+                        let trigger_label = truncate_to_word_boundary(&result.cause, 80);
 
                         let params = ygg_store::postgres::engrams::EngramSdrParams {
                             cause: &result.cause,
