@@ -13,6 +13,8 @@ graph TB
         Mimir["mimir :9090<br/>Engram Memory"]
         McpServer["ygg-mcp-server<br/>MCP stdio server"]
         OllamaM["Ollama :11434<br/>IPEX-LLM container<br/>qwen3-coder:30b-a3b-q4_K_M<br/>qwen3-embedding (4096-dim)"]
+        STT["STT :9097<br/>SenseVoiceSmall<br/>ONNX + OpenVINO EP<br/>Intel AI Boost NPU"]
+        TTS["TTS :9095<br/>Kokoro v1.0<br/>ONNX Runtime CPU"]
     end
 
     subgraph Hugin["Hugin (<hugin-ip>)"]
@@ -60,7 +62,7 @@ graph TB
 | Service | Crate | Binary | Port | Responsibility | Owned Data | Status |
 |---------|-------|--------|------|----------------|------------|--------|
 | **Odin** | `crates/odin` | `odin` | 8080 | OpenAI-compatible API gateway, semantic routing, RAG pipeline, SSE streaming, Mimir proxy, HA context injection, Prometheus metrics, voice WebSocket pipeline (VAD → SDR skill cache → omni chat → legacy STT fallback), SDR skill cache (`MAX_SKILLS=512`, LRU eviction) | Routing rules (in-memory from config), HA context cache (60s TTL), SDR skill cache (in-memory, `Arc<RwLock<Vec<CachedSkill>>>`) | DONE (Sprint 005) |
-| **Mimir** | `crates/mimir` | `mimir` | 9090 | Engram memory CRUD, embedding, dedup, LSH indexing | `yggdrasil.engrams`, `yggdrasil.lsh_buckets`, Qdrant `engrams` collection | DONE (Sprint 002) |
+| **Mimir** | `crates/mimir` | `mimir` | 9090 | Engram memory CRUD, embedding, dedup, LSH indexing, autonomous auto-ingest with SDR template matching | `yggdrasil.engrams`, `yggdrasil.lsh_buckets`, Qdrant `engrams` collection, in-memory insight template SDRs, per-workstation cooldown map | DONE (Sprint 002, auto-ingest Sprint 044) |
 | **Huginn** | `crates/huginn` | `huginn` | 9092 (health) | File watcher, tree-sitter AST chunking, code indexing | `yggdrasil.indexed_files`, `yggdrasil.code_chunks`, Qdrant `code_chunks` collection | DONE (Sprint 003) |
 | **Muninn** | `crates/muninn` | `muninn` | 9091 | Semantic code retrieval (vector + BM25 fusion) | Read-only from Huginn's tables | DONE (Sprint 004) |
 | **ygg-mcp-server** | `crates/ygg-mcp-server` | `ygg-mcp-server` | N/A (stdio) | MCP server exposing 9 tools (code search, memory, generation, 4 HA tools) and 2 resources to IDE clients via JSON-RPC over stdin/stdout | None (stateless bridge) | DONE (Sprint 006) |
@@ -260,6 +262,77 @@ sequenceDiagram
     O-->>F: [{id, cause, effect, similarity}] (passthrough)
 ```
 
+## Autonomous Memory Pipeline (Sprint 044)
+
+Claude Code hook scripts (`settings.json`) intercept Edit/Write/Bash tool invocations to provide ambient memory without explicit MCP tool calls. Memory recall and ingestion happen automatically, costing zero context tokens.
+
+### Recall Flow (PreToolUse)
+
+```mermaid
+sequenceDiagram
+    participant CC as Claude Code
+    participant RH as ygg-memory-recall.sh<br/>(workstation)
+    participant M as Mimir :9090<br/>(Munin)
+
+    CC->>RH: PreToolUse(Edit|Write)<br/>$CLAUDE_TOOL_INPUT
+    RH->>RH: Extract file_path + content snippet
+    RH->>M: POST /api/v1/recall<br/>{text, limit: 3, include_text: true}
+    M-->>RH: {events: [{cause, effect, similarity}]}
+    RH->>RH: Format as "## Relevant Memories" markdown
+    RH-->>CC: {hookSpecificOutput: {additionalContext: "..."}}
+    Note over RH: Hard timeout: 500ms (curl --max-time 0.5)<br/>Mimir unreachable → exit 0, empty context
+```
+
+### Ingest Flow (PostToolUse)
+
+```mermaid
+sequenceDiagram
+    participant CC as Claude Code
+    participant IH as ygg-memory-ingest.sh<br/>(workstation)
+    participant M as Mimir :9090<br/>(Munin)
+    participant PG as PostgreSQL
+    participant QD as Qdrant
+
+    CC->>IH: PostToolUse(Edit|Write|Bash)<br/>$CLAUDE_TOOL_INPUT + $CLAUDE_TOOL_OUTPUT
+    IH->>IH: Build content string from tool I/O
+    IH-)M: POST /api/v1/auto-ingest (background, fire-and-forget)
+    IH-->>CC: exit 0 (immediate, non-blocking)
+
+    M->>M: Cooldown + dedup check
+    M->>M: ONNX embed → 256-bit SDR
+    M->>M: Hamming scan against 6 insight template SDRs
+    alt Match >= threshold (default 0.3)
+        M->>M: Auto-generate cause/effect from template + content
+        M->>PG: INSERT engram
+        M->>QD: Upsert vector
+    else Below threshold
+        M->>M: Skip (no storage)
+    end
+```
+
+### Insight Templates
+
+Six pre-seeded engrams (tagged `insight_template`) define what content is worth auto-storing. Mimir loads their SDR fingerprints at startup and scans incoming content against them.
+
+| Template | Matches On |
+|----------|-----------|
+| `bug_fix` | Error resolution, debugging sessions, root cause identification |
+| `architecture_decision` | System design, module boundaries, API contract changes |
+| `sprint_lifecycle` | Sprint start/end, scope modifications, planning |
+| `user_feedback` | Corrections, preferences, workflow guidance |
+| `deployment_change` | SSH/Docker/systemctl commands, config deployments |
+| `gotcha` | Workarounds, caveats, non-obvious constraints |
+
+### Graceful Degradation
+
+All hook scripts exit 0 regardless of Mimir availability. If Mimir is unreachable, the recall hook returns empty `additionalContext` (no block, no error) and the ingest hook silently drops the request. Explicit `query_memory_tool` / `store_memory_tool` remain available as manual fallback.
+
+### Visual Indicators
+
+Hook scripts emit colored status lines to stderr (visible in the terminal, zero context cost for Claude):
+- Recall: `[mem] <- recalled N engrams` (or silent on miss/failure)
+- Ingest: `[mem] -> stored: {template}` or `[mem] -> skipped`
+
 ## Data Flow: MCP Tool Call (Sprint 006)
 
 ```mermaid
@@ -309,6 +382,8 @@ sequenceDiagram
 | Ollama (Hugin) | `<hugin-ip>` | 11434 | HTTP | odin, huginn, muninn |
 | PostgreSQL | Munin (localhost, pgvector Docker) | 5432 | SQL | mimir, huginn, muninn (via ygg-store) |
 | Qdrant | hades (`<hades-ip>`) | 6334 | gRPC | mimir, huginn, muninn (via ygg-store) |
+| STT (SenseVoiceSmall) | Munin (localhost) | 9097 | HTTP | odin (voice pipeline) — ONNX + OpenVINO EP on Intel NPU |
+| TTS (Kokoro v1.0) | Munin (localhost) | 9095 | HTTP | odin (voice pipeline) — ONNX Runtime CPU |
 
 ## Database Schema
 
@@ -343,4 +418,6 @@ Each service loads its config from `configs/<service>/config.yaml`. Config struc
 | 2026-03-09 | Sprint 005 finalized as DONE. Corrected stale references: Hugin model updated from QwQ-32B to qwen3:30b-a3b (Sprint 013). Embedding dimension corrected from 1024 to 4096 (qwen3-embedding actual output). PostgreSQL location corrected from Hades to Munin pgvector Docker container. Munin Ollama annotated as IPEX-LLM container (Sprint 014). Huginn port 9092 added to service registry. All service statuses updated to DONE. | system-architect |
 | 2026-03-09 | Sprint 006 finalized as DONE. ygg-mcp-server status updated to DONE in service registry. HA tools merged into Sprint 006 (originally planned for Sprint 007). HA automation data flow re-attributed from Sprint 007 to Sprint 006. 9 tools + 2 resources fully implemented. Known discrepancy: AutomationGenerator requests model qwq-32b but actual Hugin model is qwen3:30b-a3b. | system-architect |
 | 2026-03-09 | Sprint 010 (Production Hardening) finalized as DONE. Bug fixes applied: (1) all qwq-32b/QwQ-32B model references in ygg-ha and ygg-mcp-server replaced with qwen3:30b-a3b -- resolves the discrepancy noted in the Sprint 006 changelog entry; (2) HA_TOKEN env var expansion added to ygg-mcp-server startup; (3) backup-hades.sh PG host corrected from Hades (<hades-ip>/postgres) to Munin (127.0.0.1/yggdrasil); (4) WatchdogSec=30 re-enabled in all 4 daemon systemd units (odin, mimir, huginn, muninn). Two deploy-only items remain for infra-devops: backup cron job installation on Munin, and NetworkHardware.md model reference update. 57 tests pass, zero qwq references remaining. | system-architect |
+| 2026-03-22 | Sprint 044: Added Autonomous Memory Pipeline section. Mimir service description updated with auto-ingest responsibility and SDR template matching. Added recall flow (PreToolUse hook -> Mimir /api/v1/recall with include_text), ingest flow (PostToolUse hook -> Mimir /api/v1/auto-ingest -> SDR template scan -> conditional engram storage), insight template table, graceful degradation strategy, and visual indicator documentation. | system-architect |
+| 2026-03-23 | Sprint 045: Voice Pipeline NPU Acceleration. STT (SenseVoiceSmall) moved to Intel AI Boost NPU via ONNX Runtime OpenVINO EP — 2.5x latency reduction (e.g. 5s audio: 665ms CPU → 303ms NPU). TTS (Kokoro v1.0) tested on NPU but incompatible (dynamic STFT shapes), remains on CPU. NPU driver v1.30.0 installed. Both servers rewritten with dual-backend (NPU/CPU) and env-var rollback (STT_DEVICE, TTS_DEVICE). FunASR ONNX export fixed (Less node type mismatch). STT/TTS added to topology diagram and External Services table. | system-architect |
 | 2026-03-18 | Odin crate improvements (simplify sprint): (1) `SkillCache` pre-computes `Arc<dyn Fft<f32>>` at construction — no per-call `FftPlanner`; (2) `match_skill` and `learn` both use two-phase RwLock (read for O(N) scan, write only on hit/insert) with TOCTOU guard via SDR equality re-verify under write lock; (3) `learn` enforces `MAX_SKILLS=512` cap with O(1) LRU `swap_remove` eviction; (4) `process_utterance` reduced to 4 params (reads `http`, `stt_url`, `tts_url`, `omni_url` from `AppState`); (5) `pcm_bytes` allocation deferred past skill cache check (saves ~64 KB on cache hits); (6) `seen_resume` flag set only inside session validation success block; (7) `send_tts()` helper extracted; (8) `to_cloud_messages()` private helper extracted in `handlers.rs` to deduplicate `try_cloud_fallback`/`try_cloud_or_fail`; (9) `task_worker.rs` calls `backends.first()` once via `let b` binding. Added Voice WebSocket Pipeline data flow and SDR Skill Cache sections. Munin Ollama inference (3B+ models) confirmed fixed as of 2026-03-18. | system-architect |

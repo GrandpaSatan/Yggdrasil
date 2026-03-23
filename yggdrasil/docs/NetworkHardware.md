@@ -6,10 +6,12 @@
 - **OS:** Ubuntu Server 25.10
 - **CPU:** Intel Core Ultra 185H (6P + 8E + 2LP cores, 16 threads)
 - **iGPU:** Intel ARC Graphics (Xe-LPG, NO XMX — not suitable for LLM inference)
+- **NPU:** Intel AI Boost (~34 TOPS INT8) — STT inference (SenseVoiceSmall via OpenVINO EP)
 - **eGPU:** AMD Radeon RX 9060 XT 16GB (USB4/Thunderbolt, RDNA 4)
 - **RAM:** 48GB DDR5
 - **Network:** 2x 5Gb Ethernet
-- **Runs:** Odin (port 8080), Mimir (port 9090), MCP Remote (port 9093), Sentinel, ygg-node
+- **Runs:** Odin (port 8080), Mimir (port 9090), MCP Remote (port 9093), STT (port 9097, NPU), TTS (port 9095, CPU), Sentinel, ygg-node
+- **NPU Driver:** intel-level-zero-npu v1.30.0, OpenVINO 2025.4.1, ONNX Runtime OpenVINO EP 1.24.1
 - **SSH:** key-based authentication required (`yggdrasil@munin`)
 
 ### Power Management (Laptop Server Mode)

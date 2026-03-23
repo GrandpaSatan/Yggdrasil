@@ -7,12 +7,14 @@ Before=yggdrasil-odin.service
 Type=simple
 User=yggdrasil
 Group=yggdrasil
+SupplementaryGroups=render
 WorkingDirectory=/opt/yggdrasil/deploy/munin/tts-server
-ExecStart=/usr/bin/python3 server.py
+ExecStart=/opt/yggdrasil/deploy/munin/tts-server/.venv/bin/python3 server.py
 Restart=on-failure
 RestartSec=5
 TimeoutStartSec=120
 Environment=PYTHONUNBUFFERED=1
+Environment=TTS_DEVICE=NPU
 
 [Install]
 WantedBy=multi-user.target
