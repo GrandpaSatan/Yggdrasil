@@ -1557,6 +1557,11 @@ pub async fn auto_ingest(
         return Ok(auto_ingest_skip("empty_content"));
     }
 
+    // Step 1b: Skip content too short to be meaningful (e.g. " -> " from empty Bash hooks)
+    if body.content.trim().len() < 20 {
+        return Ok(auto_ingest_skip("content_too_short"));
+    }
+
     // Step 2: Check enabled flag (default: true when config absent)
     let cfg = state.config.auto_ingest.as_ref();
     let enabled = cfg.map(|c| c.enabled).unwrap_or(true);

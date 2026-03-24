@@ -10,12 +10,12 @@
 
 use reqwest::Client;
 use rmcp::{
-    ServerHandler,
+    Peer, RoleServer, ServerHandler,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{
-        AnnotateAble as _, Implementation, ListResourcesResult, PaginatedRequestParams,
-        RawResource, ReadResourceRequestParams, ReadResourceResult, ServerCapabilities,
-        ServerInfo,
+        AnnotateAble as _, Implementation, ListResourcesResult, LoggingLevel,
+        LoggingMessageNotificationParam, PaginatedRequestParams, RawResource,
+        ReadResourceRequestParams, ReadResourceResult, ServerCapabilities, ServerInfo,
     },
     tool, tool_handler, tool_router,
 };
@@ -104,15 +104,33 @@ impl YggdrasilServer {
         Returns cause/effect pairs with similarity scores.")]
     async fn query_memory_tool(
         &self,
+        peer: Peer<RoleServer>,
         Parameters(params): Parameters<QueryMemoryParams>,
     ) -> String {
+        let query_preview: String = params.text.chars().take(60).collect();
+        let _ = peer.notify_logging_message(
+            LoggingMessageNotificationParam::new(
+                LoggingLevel::Info,
+                serde_json::json!(format!("[mem] <- recall: {query_preview}...")),
+            )
+            .with_logger("ygg-mem".to_string()),
+        ).await;
         let result = query_memory(&self.client, &self.config, params).await;
-        result
+        let text = result
             .content
             .into_iter()
             .next()
             .and_then(|c| c.raw.as_text().map(|t| t.text.clone()))
-            .unwrap_or_default()
+            .unwrap_or_default();
+        let count = text.matches("**Cause:**").count();
+        let _ = peer.notify_logging_message(
+            LoggingMessageNotificationParam::new(
+                LoggingLevel::Info,
+                serde_json::json!(format!("[mem] <- recalled {count} engrams")),
+            )
+            .with_logger("ygg-mem".to_string()),
+        ).await;
+        text
     }
 
     /// Store a new cause/effect memory engram.
@@ -125,15 +143,33 @@ impl YggdrasilServer {
         you should then decide whether to update (pass id) or create new (pass force=true).")]
     async fn store_memory_tool(
         &self,
+        peer: Peer<RoleServer>,
         Parameters(params): Parameters<StoreMemoryParams>,
     ) -> String {
+        let cause_preview: String = params.cause.chars().take(60).collect();
+        let _ = peer.notify_logging_message(
+            LoggingMessageNotificationParam::new(
+                LoggingLevel::Info,
+                serde_json::json!(format!("[mem] -> storing: {cause_preview}...")),
+            )
+            .with_logger("ygg-mem".to_string()),
+        ).await;
         let result = store_memory(&self.client, &self.config, params).await;
-        result
+        let text = result
             .content
             .into_iter()
             .next()
             .and_then(|c| c.raw.as_text().map(|t| t.text.clone()))
-            .unwrap_or_default()
+            .unwrap_or_default();
+        let status = if text.contains("successfully") { "stored" } else { "skipped" };
+        let _ = peer.notify_logging_message(
+            LoggingMessageNotificationParam::new(
+                LoggingLevel::Info,
+                serde_json::json!(format!("[mem] -> {status}")),
+            )
+            .with_logger("ygg-mem".to_string()),
+        ).await;
+        text
     }
 
     /// Find engrams at the intersection, union, or difference of two concepts.
@@ -769,6 +805,7 @@ impl ServerHandler for YggdrasilServer {
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_resources()
+                .enable_logging()
                 .build(),
         )
         .with_server_info(Implementation::new("yggdrasil", env!("CARGO_PKG_VERSION")))
