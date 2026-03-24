@@ -2,7 +2,7 @@
 # Merge LoRA adapters into base model, convert to GGUF, quantize, and import to Ollama.
 set -euo pipefail
 
-BARN="/data/saga"
+BARN="${BARN_DIR:-/data/saga}"
 BASE_MODEL="Qwen/Qwen3-0.6B"
 ADAPTER_PATH="$BARN/adapters/saga-lora"
 MERGED_PATH="$BARN/merged"

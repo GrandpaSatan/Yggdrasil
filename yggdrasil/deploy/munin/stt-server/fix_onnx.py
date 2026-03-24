@@ -4,12 +4,13 @@
 FunASR's torch.onnx.export produces Less nodes with mixed f32/i64 inputs.
 This script inserts Cast nodes to fix the type mismatch so OpenVINO can load it.
 """
+import os
 import sys
 import time
 import onnx
 from onnx import helper, TensorProto, numpy_helper
 
-MODEL_DIR = "/home/yggdrasil/.cache/modelscope/hub/models/iic/SenseVoiceSmall"
+MODEL_DIR = os.environ.get("SENSEVOICE_MODEL_DIR", os.path.expanduser("~/.cache/modelscope/hub/models/iic/SenseVoiceSmall"))
 MODEL_PATH = f"{MODEL_DIR}/model.onnx"
 FIXED_PATH = f"{MODEL_DIR}/model_fixed.onnx"
 

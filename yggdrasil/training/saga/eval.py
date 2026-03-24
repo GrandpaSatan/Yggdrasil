@@ -10,11 +10,12 @@ Tests:
 """
 
 import json
+import os
 import sys
 import requests
 from pathlib import Path
 
-BARN = "/data/saga/data"
+BARN = os.environ.get("BARN_DIR", "/data/saga/data")
 OLLAMA_URL = "http://localhost:11434"
 MODEL = "saga:0.6b"
 

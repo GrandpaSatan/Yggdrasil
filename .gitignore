@@ -19,6 +19,9 @@ Thumbs.db
 *.key
 *.secret
 
+# Network topology (contains real IPs, MACs, credentials)
+yggdrasil/docs/NetworkHardware.md
+
 # Real config files (use *.example as templates)
 yggdrasil/configs/*/config.json
 yggdrasil/configs/*/config.local.json
@@ -41,6 +44,15 @@ yggdrasil/sprints/
 # Claude local instructions
 yggdrasil/.claude/
 yggdrasil/deploy/workstation/CLAUDE.md
+
+# QA reports (may contain sensitive references)
+qareports/
+
+# Misc notes
+noteforuser.md
+
+# Agent memory (session-specific, may contain topology)
+.claude/agent-memory/
 
 # Temporary files
 /tmp/

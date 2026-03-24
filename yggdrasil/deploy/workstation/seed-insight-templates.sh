@@ -7,7 +7,7 @@
 # fingerprints that separate well in Hamming space. Short generic descriptions
 # produce overlapping embeddings that cause misclassification.
 
-MIMIR_URL="${MIMIR_URL:-http://<munin-ip>:9090}"
+MIMIR_URL="${MIMIR_URL:-http://localhost:9090}"
 
 echo "=== Seeding Mimir insight templates ==="
 echo "Target: ${MIMIR_URL}"

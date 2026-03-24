@@ -29,7 +29,7 @@ impl ProxmoxClient {
         }
     }
 
-    /// Access the base URL (e.g. "https://<thor-ip>:8006").
+    /// Access the base URL (e.g. "https://proxmox-host:8006").
     pub fn base_url(&self) -> &str {
         &self.base_url
     }

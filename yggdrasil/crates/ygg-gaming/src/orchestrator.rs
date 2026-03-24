@@ -321,11 +321,10 @@ pub async fn pair(
         .as_deref()
         .ok_or_else(|| OrchestratorError::Pairing(format!("VM '{vm_name}' has no IP configured")))?;
 
-    let ssh_user = vm.ssh_user.as_deref().unwrap_or("yggdrasil");
-    let creds = vm
-        .sunshine_creds
-        .as_deref()
-        .unwrap_or("user:changeme");
+    let ssh_user = vm.ssh_user.as_deref()
+        .ok_or_else(|| OrchestratorError::Pairing(format!("VM '{vm_name}' has no ssh_user configured")))?;
+    let creds = vm.sunshine_creds.as_deref()
+        .ok_or_else(|| OrchestratorError::Pairing(format!("VM '{vm_name}' has no sunshine_creds configured")))?;
     let port = vm.sunshine_port;
 
     info!(vm = vm_name, ip = ip, "pairing Moonlight via Sunshine PIN");

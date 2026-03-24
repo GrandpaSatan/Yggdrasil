@@ -448,7 +448,7 @@ Memory recall and ingestion are handled automatically via Claude Code hook scrip
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MIMIR_URL` | `http://<munin-ip>:9090` | Base URL for Mimir. Set this if Mimir runs on a different host or port. Used by all hook scripts. |
+| `MIMIR_URL` | `http://localhost:9090` | Base URL for Mimir. Set this if Mimir runs on a different host or port. Used by all hook scripts. |
 
 ### `POST /api/v1/auto-ingest`
 
@@ -496,7 +496,7 @@ Other `skipped_reason` values: `"cooldown"`, `"duplicate"`, `"empty_content"`.
 **curl example:**
 
 ```bash
-curl -s -X POST http://<munin-ip>:9090/api/v1/auto-ingest \
+curl -s -X POST http://localhost:9090/api/v1/auto-ingest \
   -H "Content-Type: application/json" \
   -d '{
     "content": "Fixed DashMap clone bug: use Arc<DashMap> for shared Axum state",
@@ -511,7 +511,7 @@ curl -s -X POST http://<munin-ip>:9090/api/v1/auto-ingest \
 The existing recall endpoint accepts an optional `include_text: true` parameter. When set, each returned event includes the full `cause` and `effect` text fields (normally omitted per Sprint 015 zero-injection policy).
 
 ```bash
-curl -s -X POST http://<munin-ip>:9090/api/v1/recall \
+curl -s -X POST http://localhost:9090/api/v1/recall \
   -H "Content-Type: application/json" \
   -d '{"text": "DashMap shared state Axum", "limit": 3, "include_text": true}'
 ```
@@ -559,7 +559,7 @@ The hook scripts are configured in `~/.claude/settings.json` under the `hooks` k
 
 3. Optionally set `MIMIR_URL` if Mimir is not at the default address:
    ```bash
-   export MIMIR_URL="http://<munin-ip>:9090"
+   export MIMIR_URL="http://localhost:9090"
    ```
 
 **Prerequisites:** `curl` and `jq` must be installed on the workstation.
@@ -570,7 +570,7 @@ The `seed-insight-templates.sh` script populates Mimir with the 6 insight templa
 
 ```bash
 # Seed all 6 templates (idempotent)
-MIMIR_URL=http://<munin-ip>:9090 deploy/workstation/seed-insight-templates.sh
+MIMIR_URL=http://localhost:9090 deploy/workstation/seed-insight-templates.sh
 
 # Templates seeded: bug_fix, architecture_decision, sprint_lifecycle,
 # user_feedback, deployment_change, gotcha

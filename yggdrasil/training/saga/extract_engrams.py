@@ -2,11 +2,12 @@
 """Extract all engrams from Yggdrasil PG into JSONL for Saga training."""
 
 import json
+import os
 import sys
 import psycopg2
 
-BARN = "/data/saga/data"
-PG_DSN = "host=<hades-ip> port=5432 dbname=yggdrasil user=yggdrasil password=changeme"
+BARN = os.environ.get("BARN_DIR", "/data/saga/data")
+PG_DSN = os.environ.get("PG_DSN", "host=localhost port=5432 dbname=yggdrasil user=yggdrasil")
 
 def main():
     conn = psycopg2.connect(PG_DSN)

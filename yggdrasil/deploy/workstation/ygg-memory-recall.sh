@@ -3,7 +3,7 @@
 # Called by Claude Code with CLAUDE_TOOL_INPUT env var set to the tool JSON.
 # NEVER exits non-zero — hook failures must not block tool execution.
 
-MIMIR_URL="${MIMIR_URL:-http://<munin-ip>:9090}"
+MIMIR_URL="${MIMIR_URL:-http://localhost:9090}"
 
 # Extract file path and content snippet from tool input
 file_path=$(echo "${CLAUDE_TOOL_INPUT:-{}}" | jq -r '.file_path // .path // "unknown"' 2>/dev/null || echo "unknown")

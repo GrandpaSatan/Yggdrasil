@@ -20,7 +20,7 @@ from transformers import (
 )
 from trl import SFTTrainer, SFTConfig
 
-BARN = "/data/saga"
+BARN = os.environ.get("BARN_DIR", "/data/saga")
 BASE_MODEL = "Qwen/Qwen3-0.6B"
 MAX_SEQ_LEN = 512
 

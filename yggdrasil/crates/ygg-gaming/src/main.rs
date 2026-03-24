@@ -148,8 +148,14 @@ async fn main() {
                 eprintln!("✗ VM '{vm_name}' has no IP configured");
                 process::exit(1);
             };
-            let ssh_user = vm.ssh_user.as_deref().unwrap_or("yggdrasil");
-            let creds = vm.sunshine_creds.as_deref().unwrap_or("user:changeme");
+            let Some(ssh_user) = vm.ssh_user.as_deref() else {
+                eprintln!("✗ VM '{vm_name}' has no ssh_user configured");
+                process::exit(1);
+            };
+            let Some(creds) = vm.sunshine_creds.as_deref() else {
+                eprintln!("✗ VM '{vm_name}' has no sunshine_creds configured");
+                process::exit(1);
+            };
             let port = vm.sunshine_port;
 
             println!("Pairing {vm_name} at {ip} with PIN {pin}...");

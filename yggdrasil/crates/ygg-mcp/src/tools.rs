@@ -4877,7 +4877,8 @@ pub async fn deploy(
             let mut results = Vec::new();
 
             for node in &nodes {
-                let dest = format!("yggdrasil@{}:/opt/yggdrasil/bin/{}", node, params.service);
+                let deploy_user = std::env::var("DEPLOY_USER").unwrap_or_else(|_| "yggdrasil".into());
+                let dest = format!("{}@{}:/opt/yggdrasil/bin/{}", deploy_user, node, params.service);
                 let output = tokio::process::Command::new("rsync")
                     .args(["-az", "--progress", &bin_path, &dest])
                     .output()

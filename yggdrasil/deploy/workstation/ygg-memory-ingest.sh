@@ -3,7 +3,7 @@
 # Called by Claude Code with CLAUDE_TOOL_INPUT and CLAUDE_TOOL_OUTPUT env vars.
 # NEVER exits non-zero — hook failures must not block tool execution.
 
-MIMIR_URL="${MIMIR_URL:-http://<munin-ip>:9090}"
+MIMIR_URL="${MIMIR_URL:-http://localhost:9090}"
 workstation=$(hostname)
 
 input="${CLAUDE_TOOL_INPUT:-{}}"

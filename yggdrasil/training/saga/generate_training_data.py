@@ -15,8 +15,8 @@ import subprocess
 import re
 from pathlib import Path
 
-BARN = "/data/saga/data"
-REPO = "./yggdrasil"
+BARN = os.environ.get("BARN_DIR", "/data/saga/data")
+REPO = os.environ.get("YGGDRASIL_REPO", os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 SYSTEM_PROMPT = "You are Saga, Yggdrasil's memory engine. Respond ONLY in valid JSON."
 
 # Category mapping from tags to Saga categories

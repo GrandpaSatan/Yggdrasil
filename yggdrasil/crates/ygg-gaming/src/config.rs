@@ -30,7 +30,7 @@ pub struct WolConfig {
 }
 
 fn default_broadcast() -> String {
-    "<thor-ip>55".to_string()
+    "255.255.255.255".to_string()
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -56,7 +56,7 @@ pub struct VmEntry {
     pub gpu_preference: String,
     #[serde(default = "default_hostpci_slot")]
     pub hostpci_slot: String,
-    /// SSH user for pairing (e.g., "yggdrasil").
+    /// SSH user for pairing (e.g., "myuser").
     pub ssh_user: Option<String>,
     /// Sunshine web UI credentials (user:pass).
     pub sunshine_creds: Option<String>,

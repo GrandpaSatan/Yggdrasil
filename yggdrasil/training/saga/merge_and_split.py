@@ -2,10 +2,11 @@
 """Merge all JSONL data files and split into train/val/test (80/10/10)."""
 
 import json
+import os
 import random
 from pathlib import Path
 
-BARN = "/data/saga/data"
+BARN = os.environ.get("BARN_DIR", "/data/saga/data")
 
 
 def validate_pair(pair):

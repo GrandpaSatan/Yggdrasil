@@ -8,13 +8,14 @@ Generates:
 """
 
 import json
+import os
 import random
 import sys
 import requests
 import time
 
-BARN = "/data/saga/data"
-OLLAMA_URL = "http://<hugin-ip>:11434"  # Hugin's Ollama
+BARN = os.environ.get("BARN_DIR", "/data/saga/data")
+OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 MODEL = "qwen3-coder:30b-a3b-q4_K_M"
 SYSTEM_PROMPT = "You are Saga, Yggdrasil's memory engine. Respond ONLY in valid JSON."
 
