@@ -1,0 +1,41 @@
+# ═══════════════════════════════════════════════════════════════════════
+# morrigan-llama-server.service — Template for llama-server on Morrigan
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Systemd cannot expand environment variables in User= or ExecStart paths.
+# Copy this file and replace the following placeholders before installing:
+#
+#   INFERENCE_USER   — the Unix user that runs llama-server (e.g. jhernandez)
+#   /opt/llama-server — path to your llama.cpp build directory
+#   /opt/models/      — path to your GGUF model directory
+#
+# Install:
+#   sudo cp morrigan-llama-server.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now morrigan-llama-server
+# ═══════════════════════════════════════════════════════════════════════
+
+[Unit]
+Description=llama-server (Qwen3.5-27B inference on Morrigan)
+After=network.target
+
+[Service]
+Type=simple
+User=INFERENCE_USER
+WorkingDirectory=/opt/llama-server
+ExecStart=/opt/llama-server/build/bin/llama-server \
+    --model /opt/models/Qwen3.5-27B-Q4_K_M.gguf \
+    --host 0.0.0.0 \
+    --port 8080 \
+    --n-gpu-layers 99 \
+    --split-mode layer \
+    --tensor-split 0.5,0.5 \
+    --ctx-size 16384 \
+    --parallel 2 \
+    --flash-attn on
+Restart=on-failure
+RestartSec=10
+Environment="CUDA_VISIBLE_DEVICES=0,1"
+
+[Install]
+WantedBy=multi-user.target

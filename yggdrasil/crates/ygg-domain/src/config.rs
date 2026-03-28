@@ -554,6 +554,12 @@ pub struct McpServerConfig {
     /// Only used by the local server binary. Example: "http://<munin-ip>:9093"
     #[serde(default)]
     pub remote_url: Option<String>,
+    /// SSH-accessible base for rsync memory sync.
+    /// Format: "user@host:/path/to/claude-config"
+    /// Example: "user@munin:/opt/yggdrasil/claude-config"
+    /// When set, the local server syncs and merges memory files at startup.
+    #[serde(default)]
+    pub remote_ssh: Option<String>,
     /// PostgreSQL database URL for session persistence (optional).
     /// When set, MCP remote server persists session metadata to PG.
     #[serde(default)]

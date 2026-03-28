@@ -119,13 +119,18 @@ fn ha_keywords() -> Vec<String> {
     .collect()
 }
 
-/// Keywords that indicate a gaming/VM request (Thor, Harpy, Morrigan).
-/// Used to suppress HA intent when gaming terms co-occur with "turn on".
+/// Keywords that indicate a gaming/VM/inference request.
+/// Used to suppress HA intent when these terms co-occur with "turn on".
 fn gaming_keywords() -> Vec<String> {
-    ["thor", "harpy", "morrigan", "gaming vm", "launch vm", "start vm", "load harpy", "load morrigan"]
-        .iter()
-        .map(|s| s.to_string())
-        .collect()
+    [
+        "thor", "plume", "harpy", "morrigan", "nightjar", "chirp",
+        "gaming vm", "launch vm", "start vm", "load harpy", "load morrigan",
+        "code locally", "local coding", "local inference", "local llm",
+        "inference vm", "start nightjar", "start chirp",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
 }
 
 fn keywords_for_intent(intent: &str) -> Vec<String> {

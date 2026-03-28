@@ -547,8 +547,12 @@ async fn process_utterance(
 
         let rag_context = crate::rag::RagContext::default();
         let gaming_ctx = state.gaming_config.as_ref().map(|gc| {
-            let vm_names: Vec<&str> = gc.vms.iter().map(|v| v.name.as_str()).collect();
-            format!("Available VMs on Thor: {}", vm_names.join(", "))
+            let names: Vec<String> = gc.hosts.iter().flat_map(|h| {
+                let vms = h.vms.iter().map(|v| v.name.as_str());
+                let cts = h.containers.iter().map(|c| c.name.as_str());
+                vms.chain(cts).map(|n| format!("{}/{}", h.name, n))
+            }).collect();
+            format!("Managed VMs/containers: {}", names.join(", "))
         });
         let mut system_prompt = crate::rag::build_system_prompt(
             &rag_context,

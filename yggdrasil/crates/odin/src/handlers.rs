@@ -442,8 +442,12 @@ pub async fn process_chat_text(
     // Voice pipeline uses the "voice" persona (Fergus) regardless of routed intent.
     // Inject gaming VM context so the LLM knows to use the `gaming` tool.
     let gaming_ctx = state.gaming_config.as_ref().map(|gc| {
-        let vm_names: Vec<&str> = gc.vms.iter().map(|v| v.name.as_str()).collect();
-        format!("Available VMs on Thor: {}", vm_names.join(", "))
+        let names: Vec<String> = gc.hosts.iter().flat_map(|h| {
+            let vms = h.vms.iter().map(|v| v.name.as_str());
+            let cts = h.containers.iter().map(|c| c.name.as_str());
+            vms.chain(cts).map(|n| format!("{}/{}", h.name, n))
+        }).collect();
+        format!("Managed VMs/containers: {}", names.join(", "))
     });
     let voice_role = if source == ChatSource::Voice { "voice_split" } else { "voice" };
     let system_prompt = rag::build_system_prompt(&rag_context, voice_role, gaming_ctx.as_deref());
@@ -693,8 +697,12 @@ pub async fn process_chat_audio(
 
     // ── 3. Build system prompt ───────────────────────────────────
     let gaming_ctx = state.gaming_config.as_ref().map(|gc| {
-        let vm_names: Vec<&str> = gc.vms.iter().map(|v| v.name.as_str()).collect();
-        format!("Available VMs on Thor: {}", vm_names.join(", "))
+        let names: Vec<String> = gc.hosts.iter().flat_map(|h| {
+            let vms = h.vms.iter().map(|v| v.name.as_str());
+            let cts = h.containers.iter().map(|c| c.name.as_str());
+            vms.chain(cts).map(|n| format!("{}/{}", h.name, n))
+        }).collect();
+        format!("Managed VMs/containers: {}", names.join(", "))
     });
     let system_prompt = rag::build_system_prompt(&rag_context, "voice", gaming_ctx.as_deref());
 
@@ -2004,73 +2012,101 @@ pub async fn gaming_handler(
         }
     };
 
+    // Helper to serialize Ok results or return 500
+    macro_rules! json_result {
+        ($result:expr) => {
+            match $result {
+                Ok(val) => match serde_json::to_value(&val) {
+                    Ok(v) => Json(v).into_response(),
+                    Err(e) => (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({"error": e.to_string()})),
+                    )
+                        .into_response(),
+                },
+                Err(e) => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": e.to_string()})),
+                )
+                    .into_response(),
+            }
+        };
+    }
+
+    macro_rules! require_vm_name {
+        ($req:expr, $action:expr) => {
+            match $req.vm_name.as_deref() {
+                Some(name) => name,
+                None => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({"error": format!("vm_name is required for {}", $action)})),
+                    )
+                        .into_response();
+                }
+            }
+        };
+    }
+
     match req.action.as_str() {
-        "status" | "list-gpus" => {
-            match ygg_gaming::orchestrator::status_all(config).await {
-                Ok(status) => match serde_json::to_value(&status) {
-                    Ok(v) => Json(v).into_response(),
-                    Err(e) => (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(json!({"error": e.to_string()})),
-                    )
-                        .into_response(),
-                },
-                Err(e) => (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({"error": e.to_string()})),
-                )
-                    .into_response(),
-            }
-        }
+        "status" => json_result!(ygg_gaming::orchestrator::status_all(config).await),
+        "list-gpus" => json_result!(ygg_gaming::orchestrator::list_gpus(config).await),
         "launch" => {
-            let Some(vm_name) = req.vm_name.as_deref() else {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(json!({"error": "vm_name is required for launch"})),
-                )
-                    .into_response();
-            };
-            match ygg_gaming::orchestrator::launch(config, vm_name).await {
-                Ok(result) => match serde_json::to_value(&result) {
-                    Ok(v) => Json(v).into_response(),
-                    Err(e) => (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(json!({"error": e.to_string()})),
-                    )
-                        .into_response(),
-                },
-                Err(e) => (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({"error": e.to_string()})),
-                )
-                    .into_response(),
-            }
+            let vm_name = require_vm_name!(req, "launch");
+            json_result!(ygg_gaming::orchestrator::launch(config, vm_name).await)
         }
         "stop" => {
-            let Some(vm_name) = req.vm_name.as_deref() else {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(json!({"error": "vm_name is required for stop"})),
+            let name = require_vm_name!(req, "stop");
+            // Try VM first, fall back to container
+            if config.find_vm(name).is_some() {
+                match ygg_gaming::orchestrator::stop(config, name).await {
+                    Ok(()) => Json(json!({"status": "stopped", "name": name})).into_response(),
+                    Err(e) => (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({"error": e.to_string()})),
+                    )
+                        .into_response(),
+                }
+            } else if config.find_container(name).is_some() {
+                match ygg_gaming::orchestrator::stop_container(config, name).await {
+                    Ok(()) => Json(json!({"status": "stopped", "name": name})).into_response(),
+                    Err(e) => (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({"error": e.to_string()})),
+                    )
+                        .into_response(),
+                }
+            } else {
+                (
+                    StatusCode::NOT_FOUND,
+                    Json(json!({"error": format!("'{}' not found in any host", name)})),
                 )
-                    .into_response();
-            };
-            match ygg_gaming::orchestrator::stop(config, vm_name).await {
-                Ok(()) => Json(json!({"status": "stopped", "vm_name": vm_name})).into_response(),
-                Err(e) => (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({"error": e.to_string()})),
+                    .into_response()
+            }
+        }
+        "start" => {
+            let name = require_vm_name!(req, "start");
+            if config.find_vm(name).is_some() {
+                json_result!(ygg_gaming::orchestrator::launch(config, name).await)
+            } else if config.find_container(name).is_some() {
+                match ygg_gaming::orchestrator::start_container(config, name).await {
+                    Ok(()) => Json(json!({"status": "started", "name": name})).into_response(),
+                    Err(e) => (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({"error": e.to_string()})),
+                    )
+                        .into_response(),
+                }
+            } else {
+                (
+                    StatusCode::NOT_FOUND,
+                    Json(json!({"error": format!("'{}' not found in any host", name)})),
                 )
-                    .into_response(),
+                    .into_response()
             }
         }
         "pair" => {
-            let Some(vm_name) = req.vm_name.as_deref() else {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(json!({"error": "vm_name is required for pair"})),
-                )
-                    .into_response();
-            };
+            let vm_name = require_vm_name!(req, "pair");
             let Some(pin) = req.pin.as_deref() else {
                 return (
                     StatusCode::BAD_REQUEST,

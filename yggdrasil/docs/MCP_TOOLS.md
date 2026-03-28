@@ -43,7 +43,7 @@ Tools are split across two servers:
 | 24 | `screenshot_tool` | Utility (local) | **Operational** | Headless Chromium page capture |
 | 25 | `config_version_tool` | Config | **Operational** | Check/bump version for server, client, config |
 | 26 | `config_sync_tool` | Config | **Operational** | Push/pull config files across workstations |
-| 27 | `gaming_tool` | Gaming | **Operational** | Proxmox VM management on Thor |
+| 27 | `gaming_tool` | Gaming | **Operational** | Multi-host Proxmox VM/container orchestration (Thor + Plume) |
 | 28 | `vault_tool` | Security | **Operational** | AES-256-GCM encrypted secret vault |
 | 29 | `deploy_tool` | DevOps | **Operational** | Build and deploy service binaries |
 | 30 | `network_topology_tool` | Infra | **Operational** | Mesh network topology query |
@@ -563,16 +563,55 @@ Synchronize configuration files across workstations. Supports push (upload), pul
 ### 27. `gaming_tool`
 **Category:** Gaming | **Server:** Remote
 
-Manage cloud gaming VMs on Thor (Proxmox). Start/stop VMs, assign GPUs, trigger Wake-on-LAN.
+Multi-host Proxmox VM and container orchestration for gaming, inference, and service workloads. Handles Wake-on-LAN, GPU assignment, VM lifecycle, and Moonlight pairing across all configured hosts.
+
+**Actions:**
+| Action | Params Required | Description |
+|--------|-----------------|-------------|
+| `status` | none | Report all hosts online/offline, VMs with status and GPU assignment, containers with status |
+| `launch` | `vm_name` | Wake host if needed, assign GPU(s) based on VM role, start VM, run post-boot steps |
+| `stop` | `vm_name` | Gracefully shut down a VM and release all assigned GPUs |
+| `list-gpus` | none | List GPU pool across all managed Proxmox hosts with availability status |
+| `pair` | `vm_name`, `pin` | Enter a 4-digit Moonlight PIN via SSH to complete Sunshine pairing (gaming VMs only) |
 
 **Parameters:**
-| Param | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `action` | string | Yes | — | `"start"`, `"stop"`, `"status"`, `"list"` |
-| `vm_name` | string | No | — | VM name (e.g. `"harpy"`, `"morrigan"`) |
-| `gpu` | string | No | — | GPU to assign (e.g. `"rtx3060"`, `"rtx5070"`) |
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `action` | string | Yes | One of: `status`, `launch`, `stop`, `list-gpus`, `pair` |
+| `vm_name` | string | For `launch`, `stop`, `pair` | VM name (e.g. `"harpy"`, `"morrigan"`, `"nightjar"`) |
+| `pin` | string | For `pair` only | 4-digit Moonlight pairing PIN |
 
-**When to use:** When the user wants to manage gaming VMs or check GPU availability on Thor.
+**VM Roles:**
+
+Each VM declares a role that determines `launch` behavior:
+
+| Role | GPU Assignment | Post-Boot Action |
+|------|---------------|-----------------|
+| `gaming` | Single GPU (`hostpci0`), vendor-preference matched | Waits for SSH, deploys Sunshine pairing data |
+| `inference` | Multi-GPU (`hostpci0..N`), count from config | Polls health endpoint until the inference API responds |
+| `service` | None | Start only, no GPU management |
+
+**Multi-Host:** Automatically detects which Proxmox host a VM belongs to by searching all configured hosts. Sends Wake-on-LAN if the target host is offline before starting a VM.
+
+**Errors:**
+| Condition | Meaning |
+|-----------|---------|
+| `VmNotFound` | VM name does not exist on any configured host |
+| `NoGpuAvailable` | All GPUs are in use; response lists currently running VMs |
+| `ServerOffline` | Host did not come online within the WoL timeout |
+| `Timeout` | VM start, stop, or SSH-readiness exceeded configured timeout |
+
+**Examples:**
+```
+gaming_tool(action: "status")
+gaming_tool(action: "launch", vm_name: "harpy")
+gaming_tool(action: "launch", vm_name: "morrigan")
+gaming_tool(action: "stop", vm_name: "harpy")
+gaming_tool(action: "list-gpus")
+gaming_tool(action: "pair", vm_name: "harpy", pin: "1234")
+```
+
+**When to use:** When managing gaming, inference, or service VMs across multiple Proxmox hosts. Use `status` to diagnose GPU contention before `launch`. Use `list-gpus` to check pool availability without starting anything.
 
 ---
 

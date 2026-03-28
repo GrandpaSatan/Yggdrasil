@@ -14,6 +14,7 @@ Designed for local-first AI development -- your data stays on your hardware, and
 - **LLM Orchestration** (Odin) -- OpenAI-compatible API gateway with semantic routing, RAG pipeline, session continuity, and cloud provider fallback
 - **MCP Integration** -- 14 tools and 3 resources exposed to IDEs (Claude Code, VS Code) for code search, memory queries, LLM generation, and Home Assistant control
 - **Home Assistant** -- Query states, control devices, and generate automation YAML through MCP tools
+- **Multi-host compute orchestration** -- Manages gaming VMs, inference VMs, and containers across multiple Proxmox hosts with automatic GPU assignment
 
 ## Architecture
 
@@ -45,6 +46,18 @@ graph LR
         QD[(Qdrant<br/>Vector DB)]
     end
 
+    subgraph Thor
+        Harpy[Harpy<br/>Gaming VM]
+        Morrigan[Morrigan<br/>Inference VM]
+    end
+
+    subgraph Plume
+        Nightjar[Nightjar<br/>Media]
+        Chirp[Chirp<br/>Home Assistant]
+        Gitea[Gitea<br/>LXC]
+        Peckhole[Peckhole<br/>LXC]
+    end
+
     CC -->|MCP stdio| Local
     CC -->|MCP HTTP| Remote
     Remote --> Odin
@@ -62,6 +75,8 @@ graph LR
     Huginn --> OllamaB
     Muninn --> PG
     Muninn --> QD
+    Odin -->|Proxmox API| Thor
+    Odin -->|Proxmox API| Plume
 ```
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full system topology with detailed Mermaid data flow diagrams.
@@ -79,6 +94,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full system topology wi
 | `ygg-sentinel` | Binary | Beta | System monitoring and health checks |
 | `ygg-voice` | Binary | Beta | Whisper STT + Kokoro TTS pipeline |
 | `ygg-agent` | Binary | WIP | Autonomous task delegation |
+| `ygg-gaming` | lib+bin | Beta | Multi-host Proxmox VM orchestrator (gaming, inference, containers) |
 | `ygg-installer` | Binary | Beta | Deployment automation CLI |
 | `ygg-node` | Binary | WIP | Distributed node controller |
 | `ygg-domain` | Library | Stable | Shared types, config structs, domain errors |
@@ -89,7 +105,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full system topology wi
 | `ygg-ha` | Library | Stable | Home Assistant REST API client |
 | `ygg-mesh` | Library | Beta | mDNS service discovery and mesh networking |
 | `ygg-cloud` | Library | Beta | Cloud provider fallback routing (OpenAI, Claude, Gemini) |
-| `ygg-energy` | Library | Beta | Power management and thermal control |
+| `ygg-energy` | Library | Beta | Proxmox client, Wake-on-LAN, and power management |
 
 ## Prerequisites
 
@@ -131,7 +147,7 @@ cargo build --release
 > Node A and Huginn runs on Node B, Huginn's `database_url` must use Node A's
 > LAN IP. Review each `config.example.json` and replace the `<node-ip>`
 > placeholders with your real network addresses. See
-> [docs/NetworkHardware.md](docs/NetworkHardware.md) for an example topology.
+> [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full service topology.
 
 ## Configuration
 
@@ -144,7 +160,6 @@ Environment variables are expanded in config files using `${VAR_NAME}` syntax. S
 Yggdrasil is designed to run across multiple machines on a private LAN. See:
 
 - [docs/USAGE.md](docs/USAGE.md) -- All API endpoints, startup commands, deploy procedures
-- [docs/OPERATIONS.md](docs/OPERATIONS.md) -- Monitoring, debugging, backup procedures
 - [deploy/](deploy/) -- Install scripts, systemd unit templates, Docker Compose files
 
 ## Documentation
@@ -153,9 +168,6 @@ Yggdrasil is designed to run across multiple machines on a private LAN. See:
 |----------|-------------|
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | System topology, Mermaid data flows, service registry |
 | [USAGE.md](docs/USAGE.md) | API endpoints, startup and deploy commands |
-| [OPERATIONS.md](docs/OPERATIONS.md) | Monitoring, debugging, backup |
-| [NetworkHardware.md](docs/NetworkHardware.md) | Hardware reference template |
-| [HARDWARE_OPTIMIZATION.md](docs/HARDWARE_OPTIMIZATION.md) | Performance tuning guide |
 | [NAMING_CONVENTIONS.md](docs/NAMING_CONVENTIONS.md) | Crate and module naming rules |
 
 ## License

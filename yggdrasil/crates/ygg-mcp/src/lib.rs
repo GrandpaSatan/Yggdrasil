@@ -5,6 +5,7 @@
 
 pub mod agent_prompts;
 pub mod local_server;
+pub mod memory_merge;
 pub mod resources;
 pub mod server;
 pub mod tools;

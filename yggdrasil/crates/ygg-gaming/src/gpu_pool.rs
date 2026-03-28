@@ -1,7 +1,6 @@
 use ygg_energy::proxmox::ProxmoxClient;
 
 use crate::config::GpuEntry;
-use crate::proxmox_ext;
 
 /// Status of a single GPU in the pool.
 #[derive(Debug)]
@@ -42,7 +41,7 @@ pub async fn gpu_assigned_to_vm(
     node: &str,
     vmid: u32,
 ) -> Result<Option<GpuEntry>, GpuPoolError> {
-    let config = proxmox_ext::get_vm_config(client, node, vmid)
+    let config = client.vm_config(node, vmid)
         .await
         .map_err(GpuPoolError::Proxmox)?;
 
@@ -66,7 +65,7 @@ pub async fn gpu_status_all(
     client: &ProxmoxClient,
     node: &str,
 ) -> Result<Vec<GpuStatus>, GpuPoolError> {
-    let vms = proxmox_ext::list_vms(client, node)
+    let vms = client.list_vms(node)
         .await
         .map_err(GpuPoolError::Proxmox)?;
 
@@ -82,7 +81,7 @@ pub async fn gpu_status_all(
         if vm.status != "running" {
             continue;
         }
-        let config = match proxmox_ext::get_vm_config(client, node, vm.vmid).await {
+        let config = match client.vm_config(node, vm.vmid).await {
             Ok(c) => c,
             Err(_) => continue,
         };
@@ -110,7 +109,7 @@ async fn assigned_pci_addresses(
     client: &ProxmoxClient,
     node: &str,
 ) -> Result<Vec<String>, GpuPoolError> {
-    let vms = proxmox_ext::list_vms(client, node)
+    let vms = client.list_vms(node)
         .await
         .map_err(GpuPoolError::Proxmox)?;
 
@@ -120,7 +119,7 @@ async fn assigned_pci_addresses(
         if vm.status != "running" {
             continue;
         }
-        let config = match proxmox_ext::get_vm_config(client, node, vm.vmid).await {
+        let config = match client.vm_config(node, vm.vmid).await {
             Ok(c) => c,
             Err(_) => continue,
         };

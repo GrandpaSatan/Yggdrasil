@@ -296,12 +296,12 @@ pub fn build_registry() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "gaming",
-            description: "Manage cloud gaming VMs on Thor (Proxmox). Actions: status (check all VMs and GPUs), launch (wake Thor + assign GPU + start VM — takes several minutes), stop (shutdown VM + release GPU), list-gpus (show GPU availability), pair (enter Moonlight PIN for Sunshine pairing).",
+            description: "Manage VMs and containers across Proxmox hosts (Thor, Plume). Actions: 'status' (all hosts/VMs/containers), 'launch' (wake host + assign GPU + start VM), 'stop' (shutdown VM or container + release GPU), 'start' (start VM or container), 'list-gpus' (GPU pool across hosts), 'pair' (Moonlight PIN for Sunshine). Supports gaming VMs (Harpy), inference VMs (Morrigan with llama-server), and service containers (Nightjar, Chirp, Gitea).",
             parameters_schema: json!({
                 "type": "object",
                 "properties": {
-                    "action": { "type": "string", "description": "Action to perform", "enum": ["status", "launch", "stop", "list-gpus", "pair"] },
-                    "vm_name": { "type": "string", "description": "VM name (required for launch/stop/pair, e.g. harpy, morrigan)" },
+                    "action": { "type": "string", "description": "Action to perform", "enum": ["status", "launch", "start", "stop", "list-gpus", "pair"] },
+                    "vm_name": { "type": "string", "description": "VM or container name (required for launch/start/stop/pair)" },
                     "pin": { "type": "string", "description": "4-digit Moonlight pairing PIN (required for pair action)" }
                 },
                 "required": ["action"]
@@ -309,7 +309,7 @@ pub fn build_registry() -> Vec<ToolSpec> {
             tier: ToolTier::Restricted,
             endpoint: ToolEndpoint::OdinSelf("/api/v1/gaming"),
             timeout_override_secs: Some(360),
-            keywords: &["game", "gaming", "vm", "launch", "play", "moonlight", "harpy", "morrigan"],
+            keywords: &["game", "gaming", "vm", "launch", "play", "moonlight", "harpy", "morrigan", "nightjar", "chirp", "plume", "thor", "inference", "code locally", "local llm"],
             voice_always: false,
         },
         ToolSpec {
