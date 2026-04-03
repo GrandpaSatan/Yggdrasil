@@ -190,6 +190,267 @@ impl MetricsConfig {
 }""",
         "detection_patterns": [],  # Should NOT find issues
     },
+    # ── Additional tasks (Sprint 055) ────────────────────────────
+    {
+        "id": "sql_injection",
+        "name": "SQL Injection via String Format",
+        "has_issue": True,
+        "expected_detection": "SQL injection or unsanitized string interpolation in query",
+        "code": """// Review this Mimir query handler:
+use sqlx::PgPool;
+
+pub async fn search_engrams(pool: &PgPool, query: &str, limit: usize) -> Vec<Engram> {
+    let sql = format!(
+        "SELECT id, cause, effect FROM engrams WHERE cause ILIKE '%{}%' ORDER BY created_at DESC LIMIT {}",
+        query, limit
+    );
+    sqlx::query_as::<_, Engram>(&sql)
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default()
+}""",
+        "detection_patterns": [r"sql.inject|format!|interpolat|sanitiz|parameteriz|bind|unsaf"],
+    },
+    {
+        "id": "race_condition",
+        "name": "Race Condition in Shared State",
+        "has_issue": True,
+        "expected_detection": "race condition or missing synchronization on shared state",
+        "code": """// Review this session counter:
+use std::sync::Arc;
+
+pub struct RequestCounter {
+    count: Arc<std::sync::atomic::AtomicU64>,
+    last_reset: std::time::Instant,
+}
+
+impl RequestCounter {
+    pub fn increment_and_check(&mut self) -> bool {
+        let count = self.count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        // Reset every hour
+        if self.last_reset.elapsed() > std::time::Duration::from_secs(3600) {
+            self.count.store(0, std::sync::atomic::Ordering::Relaxed);
+            self.last_reset = std::time::Instant::now();
+        }
+        count < 1000
+    }
+}""",
+        "detection_patterns": [r"race|toctou|reset.*check|ordering|relax|mutex|lock|atomic.*mut|time.*check"],
+    },
+    {
+        "id": "secret_in_log",
+        "name": "Secret Leaked in Log Output",
+        "has_issue": True,
+        "expected_detection": "logging sensitive data like API key or token",
+        "code": """// Review this backend health checker:
+use tracing::info;
+
+pub async fn check_backend(url: &str, api_key: &str) -> bool {
+    let client = reqwest::Client::new();
+    info!(url = %url, api_key = %api_key, "checking backend health");
+    match client.get(url)
+        .header("Authorization", format!("Bearer {api_key}"))
+        .send()
+        .await
+    {
+        Ok(resp) => resp.status().is_success(),
+        Err(e) => {
+            tracing::warn!(error = %e, api_key = %api_key, "backend health check failed");
+            false
+        }
+    }
+}""",
+        "detection_patterns": [r"secret|api.key.*log|token.*log|sensit|credential|leak|redact"],
+    },
+    {
+        "id": "unbounded_vec",
+        "name": "Unbounded Memory Growth",
+        "has_issue": True,
+        "expected_detection": "unbounded growth or missing size limit on collection",
+        "code": """// Review this event collector:
+pub struct EventLog {
+    events: Vec<LogEvent>,
+}
+
+impl EventLog {
+    pub fn new() -> Self {
+        Self { events: Vec::new() }
+    }
+
+    pub fn push(&mut self, event: LogEvent) {
+        self.events.push(event);
+    }
+
+    pub fn recent(&self, n: usize) -> &[LogEvent] {
+        let start = self.events.len().saturating_sub(n);
+        &self.events[start..]
+    }
+}""",
+        "detection_patterns": [r"unbound|limit|capacity|grow|oom|memory|drain|truncat|max.size|overflow"],
+    },
+    {
+        "id": "correct_error_handling",
+        "name": "Correct Error Handling (False Positive Test)",
+        "has_issue": False,
+        "expected_detection": "none — error handling is correct",
+        "code": """// Review this Yggdrasil service health check:
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum HealthError {
+    #[error("database unavailable: {0}")]
+    Database(#[from] sqlx::Error),
+    #[error("qdrant unavailable: {0}")]
+    Qdrant(String),
+}
+
+pub async fn check_health(pool: &sqlx::PgPool) -> Result<(), HealthError> {
+    sqlx::query("SELECT 1")
+        .fetch_one(pool)
+        .await?;
+    Ok(())
+}""",
+        "detection_patterns": [],
+    },
+    {
+        "id": "timeout_missing",
+        "name": "Missing Request Timeout",
+        "has_issue": True,
+        "expected_detection": "missing timeout on HTTP request",
+        "code": """// Review this model proxy:
+pub async fn forward_to_ollama(client: &reqwest::Client, prompt: &str) -> Result<String, OdinError> {
+    let resp = client
+        .post("http://localhost:11434/api/generate")
+        .json(&serde_json::json!({
+            "model": "qwen3-coder:30b",
+            "prompt": prompt,
+            "stream": false,
+        }))
+        .send()
+        .await
+        .map_err(|e| OdinError::Upstream(e.to_string()))?;
+
+    let body: serde_json::Value = resp.json().await
+        .map_err(|e| OdinError::Upstream(e.to_string()))?;
+
+    Ok(body["response"].as_str().unwrap_or("").to_string())
+}""",
+        "detection_patterns": [r"timeout|time.out|deadline|no.*timeout|hang|block"],
+    },
+    {
+        "id": "correct_async_pattern",
+        "name": "Correct Async Spawn Pattern (False Positive Test)",
+        "has_issue": False,
+        "expected_detection": "none — async usage is correct",
+        "code": """// Review this fire-and-forget engram storage:
+use tokio::task;
+
+pub fn store_engram_background(pool: sqlx::PgPool, cause: String, effect: String) {
+    task::spawn(async move {
+        if let Err(e) = sqlx::query(
+            "INSERT INTO engrams (cause, effect) VALUES ($1, $2)"
+        )
+        .bind(&cause)
+        .bind(&effect)
+        .execute(&pool)
+        .await
+        {
+            tracing::warn!(error = %e, "background engram store failed");
+        }
+    });
+}""",
+        "detection_patterns": [],
+    },
+    {
+        "id": "panic_in_handler",
+        "name": "Panic in Request Handler",
+        "has_issue": True,
+        "expected_detection": "unwrap or panic in handler that should return error",
+        "code": """// Review this session lookup handler:
+use axum::{extract::{Path, State}, Json};
+
+pub async fn get_session(
+    State(state): State<AppState>,
+    Path(session_id): Path<String>,
+) -> Json<SessionResponse> {
+    let session = state.sessions.lock().unwrap()
+        .get(&session_id)
+        .unwrap()
+        .clone();
+
+    Json(SessionResponse {
+        id: session.id,
+        messages: session.messages,
+        created_at: session.created_at,
+    })
+}""",
+        "detection_patterns": [r"unwrap|panic|crash|handler.*unwrap|should.*return.*error|Result"],
+    },
+    {
+        "id": "correct_serde",
+        "name": "Correct Serde Config (False Positive Test)",
+        "has_issue": False,
+        "expected_detection": "none — serde usage is correct",
+        "code": """// Review this Yggdrasil backend config:
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackendConfig {
+    pub name: String,
+    pub url: String,
+    #[serde(default)]
+    pub backend_type: BackendType,
+    pub models: Vec<String>,
+    #[serde(default = "default_max_concurrent")]
+    pub max_concurrent: usize,
+    #[serde(default = "default_context_window")]
+    pub context_window: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum BackendType {
+    #[default]
+    Ollama,
+    Openai,
+}
+
+fn default_max_concurrent() -> usize { 2 }
+fn default_context_window() -> usize { 16384 }""",
+        "detection_patterns": [],
+    },
+    {
+        "id": "deadlock_risk",
+        "name": "Potential Deadlock with Nested Locks",
+        "has_issue": True,
+        "expected_detection": "nested lock acquisition or deadlock risk",
+        "code": """// Review this cache manager:
+use std::sync::Mutex;
+
+pub struct CacheManager {
+    primary: Mutex<HashMap<String, String>>,
+    secondary: Mutex<HashMap<String, String>>,
+}
+
+impl CacheManager {
+    pub fn promote(&self, key: &str) {
+        let secondary = self.secondary.lock().unwrap();
+        if let Some(value) = secondary.get(key) {
+            let mut primary = self.primary.lock().unwrap();
+            primary.insert(key.to_string(), value.clone());
+        }
+    }
+
+    pub fn demote(&self, key: &str) {
+        let primary = self.primary.lock().unwrap();
+        if let Some(value) = primary.get(key) {
+            let mut secondary = self.secondary.lock().unwrap();
+            secondary.insert(key.to_string(), value.clone());
+        }
+    }
+}""",
+        "detection_patterns": [r"deadlock|lock.*order|nested.*lock|mutex.*mutex|hold.*lock"],
+    },
 ]
 
 
@@ -270,7 +531,9 @@ def parse_review_response(text: str) -> tuple[bool, str, list, bool]:
         data = json.loads(match.group())
         verdict = data.get("verdict", "")
         issues = data.get("issues", [])
-        detected = verdict == "NEEDS_FIXES" or len(issues) > 0
+        # A reviewer saying LGTM with optional suggestions is NOT a false positive.
+        # Only count as "detected issue" if verdict explicitly says NEEDS_FIXES.
+        detected = verdict == "NEEDS_FIXES"
         return True, verdict, issues, detected
     except json.JSONDecodeError:
         return False, "", [], False
