@@ -154,25 +154,76 @@ def generate_classify_example(tool: str, file_path: str, content: str, category:
     }
 
 
+DISTILL_PAIRS = {
+    "bug_fix": [
+        ("Session timeout bug — sessions expiring after 60s instead of 3600s", "Fixed default timeout value from 60 to 3600 in session config. Users were losing sessions prematurely."),
+        ("Panic in CLASSIFY handler when Ollama returns empty response", "Added None check before JSON parse in saga.rs. Service no longer crashes on empty Ollama responses."),
+        ("Streaming SSE dropping last token — off-by-one in buffer flush", "Fixed buffer flush boundary in proxy.rs. Last token of streamed responses now delivered correctly."),
+        ("Port conflict validator comparing port against itself", "Fixed port comparison logic in config validation. Duplicate port detection now works across backends."),
+        ("Tree-sitter markdown heading extraction broken", "Changed heading_content to positional inline child in parser.rs. Markdown file indexing restored."),
+        ("Agent loop retrying with same prompt instead of error feedback", "Modified agent.rs to include tool error in retry prompt. Agent now learns from tool failures."),
+        ("SDR novelty gate too aggressive at 0.90 threshold", "Lowered dedup threshold to 0.85. Similar but distinct engrams now stored instead of silently dropped."),
+        ("Echo cancellation comparing raw PCM instead of transcripts", "Switched to transcript-based echo detection in voice_ws.rs. False echo matches eliminated."),
+        ("Ollama binding to wrong port after config migration", "Fixed port from 11435 to 11434 in systemd unit. Ollama service now reachable on correct port."),
+        ("HA 401 error from stale auth token", "Replaced expired token in systemd drop-in with valid jhernandez token. Home Assistant integration restored."),
+    ],
+    "architecture_decision": [
+        ("Added BackendConfig for multi-backend LLM routing", "Odin can now route to multiple Ollama/OpenAI backends with per-backend semaphores and context windows."),
+        ("Created flow engine for multi-model pipelines", "Specialist models can now collaborate in sequential pipelines. Each step's output feeds the next."),
+        ("Replaced keyword router with hybrid SDR+LLM classification", "Intent classification now uses 4μs SDR for fast path and LLM confirmation for accuracy. Keyword fallback retained."),
+        ("Added FlowConfig with Intent/Modality/Cron/Idle triggers", "Flows can be triggered by routing intent, input modality, cron schedule, or idle detection."),
+        ("Split memory storage into auto-ingest vs explicit store", "Fire-and-forget auto-ingest for tool activity. Explicit store for user-triggered memories. Different quality gates."),
+        ("Agent loop tools execute in parallel via join_all", "All tool calls within an iteration run concurrently. Model calls remain sequential. 3-5x faster tool-heavy iterations."),
+        ("Switched novelty gate from cosine to SDR Hamming distance", "Dedup checking dropped from 50ms to 4μs per engram. Enables real-time auto-ingest without latency."),
+        ("Added per-backend semaphore for admission control", "Backend at capacity returns 503 immediately instead of blocking. Prevents queue buildup during load spikes."),
+    ],
+    "sprint_lifecycle": [
+        ("Sprint 054 started — LLM Fleet Optimization", "Benchmarking specialist models, grokking experiments, distillation pipeline. Target: 7 specialist AIs."),
+        ("Sprint 055 started — Agentic AI Flows", "Building flow engine for multi-model pipelines, 12 predefined flows, dream mode for always-on AI."),
+        ("Sprint 053 complete — fleet audit and Morrigan backend", "Parallel model capacity verified, Unsloth fine-tuning env validated, Morrigan added to Odin routing."),
+        ("Sprint 051 mega-sprint complete", "Infra fixes, test harness, schema consolidation, Antigravity IDE integration. 167→191 tests."),
+        ("Architecture doc updated for Sprint 055", "Added flow engine, fleet model assignments, 12 flow definitions to ARCHITECTURE.md."),
+    ],
+    "deployment_change": [
+        ("Changed OLLAMA_MAX_LOADED_MODELS from 2 to 6", "Munin eGPU can handle parallel model loading. Reduced model swap latency for multi-model flows."),
+        ("Deployed odin binary to Munin via /tmp staging", "New odin version with flow engine live on Munin. All flows configurable via config.json."),
+        ("Updated MORRIGAN_URL for VLAN 65 migration", "All service URLs updated from 10.0.25.x to 10.0.65.x. Cross-node communication restored."),
+        ("Updated Ollama on Munin from 0.0.0 to 0.20.0", "Gemma 4 architecture now supported. Required for E2B and E4B model loading."),
+        ("Added Gemma 4 E2B as code gen model on Munin", "7.2GB model deployed. 97.3% code gen accuracy at 58.7 tok/s. Replaces LFM2-2.6B-Exp."),
+        ("Pulled Gemma 4 E4B on Hugin for review+reasoning", "9.6GB model. 93% review accuracy with 0 false positives. Dual role: reviewer + deep reasoner."),
+        ("Configured Hugin OLLAMA_NUM_PARALLEL=2", "Two concurrent requests per model. Enables parallel code gen with Gemma 4 E2B."),
+    ],
+    "gotcha": [
+        ("Ollama newline-delimited JSON, not SSE", "Had to switch from eventsource to line-by-line parsing in proxy.rs for streaming."),
+        ("Gemma 4 thinking mode puts response in thinking field", "Content field empty by default. Must pass think:false in Ollama API to get content."),
+        ("GrokFast optimizer prevents learning on LFM architecture", "Train loss stuck at 2.0. Standard AdamW reaches 0.04. GrokFast amplifies wrong gradient components for LFM."),
+        ("Ollama gemma4:e4b EOF on Munin ROCm build", "Works on Hugin with same Ollama version. ROCm build has registry manifest parsing bug. SCP blob as workaround."),
+        ("Qwen3.5 thinking mode uses reasoning_content not content", "Need chat_template_kwargs enable_thinking=False for distillation. Otherwise teacher responses are empty."),
+        ("Kokoro TTS unsupported on iGPU", "3D interpolation and ScatterNDUpdate ops not in OpenVINO EP. Must run on CPU."),
+        ("/var/log/syslog grew to 1.5TB", "ygg-sentinel debug logging filled disk. Set logrotate maxsize 1G with 3 rotations."),
+        ("Review bench scoring LGTM+suggestions as false positive", "Check verdict field only, not issues array length. Thorough reviewers shouldn't be penalized for style suggestions."),
+        ("HuggingFace Trainer resume restores old optimizer state", "Use --load-weights to load model only, not --resume-from which restores LR schedule and WD."),
+        ("ollama create fails on Munin ROCm build", "Returns 'invalid model name' for any name. Use ollama pull or serve via llama-server directly."),
+    ],
+    "user_feedback": [
+        ("Don't mock database in tests", "Real DB tests caught a migration bug that mocked tests missed. Integration tests must hit real database."),
+        ("Stop summarizing at end of responses", "User can read the diff. Trailing summaries waste tokens and time."),
+        ("Review model must reach 90%+", "80% is not acceptable for QA. A reviewer's job is to catch bugs reliably."),
+        ("Saga must be perfect", "Memory is core to Yggdrasil. Can't rely on fine-tuning alone — need structured output enforcement."),
+    ],
+}
+
+
 def generate_distill_example(tool: str, file_path: str, content: str, category: str) -> dict:
-    """Generate a single DISTILL training example."""
+    """Generate a single DISTILL training example with proper cause/effect separation."""
     user_msg = f"DISTILL\ntool: {tool}\nfile: {file_path}\ncontent: {content}"
 
-    # Generate cause/effect from content
-    cause = content[:150].strip()
-    if category == "bug_fix":
-        effect = f"Bug fixed in {file_path or 'system'}. {content[50:200].strip()}"
-    elif category == "architecture_decision":
-        effect = f"Architecture change: {content[:200].strip()}"
-    elif category == "deployment_change":
-        effect = f"Deployment updated: {content[:200].strip()}"
-    elif category == "gotcha":
-        effect = f"Non-obvious finding documented: {content[:200].strip()}"
-    elif category == "sprint_lifecycle":
-        effect = f"Sprint event: {content[:200].strip()}"
-    elif category == "user_feedback":
-        effect = f"User preference recorded: {content[:200].strip()}"
+    # Use pre-written cause/effect pairs when available
+    pairs = DISTILL_PAIRS.get(category, [])
+    if pairs:
+        cause, effect = random.choice(pairs)
     else:
+        cause = content[:150].strip()
         effect = content[:200].strip()
 
     # Generate tags

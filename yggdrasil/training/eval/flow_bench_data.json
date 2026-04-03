@@ -1,0 +1,208 @@
+{
+  "flows": [
+    {
+      "name": "code_review",
+      "description": "Generate code, review it, refine based on feedback",
+      "test_cases": [
+        {
+          "input": "Write a Rust function that calculates the average of a Vec<f64>, handling empty vectors",
+          "expected_steps": ["generate", "review", "refine"],
+          "validation": {
+            "final_output_contains": ["fn", "average", "f64"],
+            "review_should_find": "empty vector handling",
+            "syntax_valid": true
+          }
+        },
+        {
+          "input": "Create an axum health check handler that verifies database and cache connections",
+          "expected_steps": ["generate", "review", "refine"],
+          "validation": {
+            "final_output_contains": ["async", "health", "State"],
+            "review_should_find": "error handling",
+            "syntax_valid": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "voice_assist",
+      "description": "Audio transcription, reasoning, TTS response",
+      "test_cases": [
+        {
+          "input": "What is the current status of the Yggdrasil system?",
+          "expected_steps": ["transcribe", "reason", "speak"],
+          "validation": {
+            "response_contains_any": ["running", "active", "status", "system"]
+          }
+        }
+      ]
+    },
+    {
+      "name": "vision_describe",
+      "description": "Image description and reasoning",
+      "test_cases": [
+        {
+          "input": "screenshot of terminal with GPU utilization",
+          "expected_steps": ["describe", "reason"],
+          "validation": {
+            "response_contains_any": ["GPU", "terminal", "utilization", "nvidia"]
+          }
+        }
+      ]
+    },
+    {
+      "name": "saga_classify_distill",
+      "description": "Classify content and extract cause/effect",
+      "test_cases": [
+        {
+          "input": "CLASSIFY\ntool: Edit\nfile: odin/src/handlers.rs\ncontent: Fixed session timeout bug — sessions were expiring after 60s instead of 3600s",
+          "expected_response": {"category": "bug_fix", "should_store": true},
+          "validation": {"json_valid": true, "has_fields": ["category", "should_store"]}
+        },
+        {
+          "input": "CLASSIFY\ntool: Bash\nfile: \ncontent: cargo fmt -- all files",
+          "expected_response": {"category": "routine", "should_store": false},
+          "validation": {"json_valid": true, "has_fields": ["category", "should_store"]}
+        },
+        {
+          "input": "DISTILL\ntool: Edit\nfile: odin/src/flow.rs\ncontent: Created flow engine for multi-model pipelines with sequential step execution",
+          "expected_response": {"has_cause": true, "has_effect": true, "has_tags": true},
+          "validation": {"json_valid": true, "has_fields": ["cause", "effect", "tags"]}
+        }
+      ]
+    },
+    {
+      "name": "complex_reasoning",
+      "description": "Fast planning then deep verification",
+      "test_cases": [
+        {
+          "input": "Should we use WebSockets or SSE for streaming LLM responses to the frontend?",
+          "expected_steps": ["fast_plan", "deep_verify"],
+          "validation": {
+            "response_discusses": ["tradeoffs", "latency", "browser support"]
+          }
+        },
+        {
+          "input": "Design a caching strategy for Mimir memory queries",
+          "expected_steps": ["fast_plan", "deep_verify"],
+          "validation": {
+            "response_discusses": ["TTL", "invalidation", "memory"]
+          }
+        }
+      ]
+    },
+    {
+      "name": "home_assistant",
+      "description": "Extract HA entity and action, execute, confirm",
+      "test_cases": [
+        {
+          "input": "Turn off the living room lights",
+          "expected_steps": ["extract_action", "execute", "confirm"],
+          "validation": {
+            "entity_extracted": "light.living_room",
+            "service_called": "light.turn_off"
+          }
+        },
+        {
+          "input": "Set the thermostat to 72 degrees",
+          "expected_steps": ["extract_action", "execute", "confirm"],
+          "validation": {
+            "entity_extracted": "climate",
+            "service_called": "climate.set_temperature"
+          }
+        }
+      ]
+    },
+    {
+      "name": "dream_consolidation",
+      "description": "Review recent memories and find patterns",
+      "test_cases": [
+        {
+          "input": "consolidate",
+          "trigger": "idle",
+          "expected_steps": ["query_recent", "find_patterns", "store_insights"],
+          "validation": {
+            "produces_engram": true,
+            "has_tags": ["dream", "consolidation"]
+          }
+        }
+      ]
+    },
+    {
+      "name": "dream_exploration",
+      "description": "Brainstorm angles on a seed topic",
+      "test_cases": [
+        {
+          "input": "How could Yggdrasil's memory system predict user needs before they ask?",
+          "trigger": "manual",
+          "expected_steps": ["brainstorm", "evaluate", "store"],
+          "validation": {
+            "produces_engram": true,
+            "min_ideas": 3
+          }
+        }
+      ]
+    },
+    {
+      "name": "dream_speculation",
+      "description": "Deep reasoning on hard problems",
+      "test_cases": [
+        {
+          "input": "Can grokking be achieved on hybrid conv/attention architectures with full fine-tuning?",
+          "trigger": "manual",
+          "expected_steps": ["deep_reason", "summarize", "store"],
+          "validation": {
+            "produces_engram": true,
+            "min_reasoning_tokens": 200
+          }
+        }
+      ]
+    },
+    {
+      "name": "looped_review",
+      "description": "Generate-review-refine loop until LGTM",
+      "test_cases": [
+        {
+          "input": "Write a thread-safe connection pool for PostgreSQL with configurable max connections",
+          "expected_steps": ["generate", "review", "refine"],
+          "max_iterations": 3,
+          "convergence_pattern": "LGTM",
+          "validation": {
+            "final_verdict": "LGTM",
+            "syntax_valid": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "research",
+      "description": "Decompose question, search tools, synthesize report",
+      "test_cases": [
+        {
+          "input": "What are the performance characteristics of LFM2 models on edge hardware?",
+          "expected_steps": ["decompose", "search", "synthesize"],
+          "tools_available": ["web_search", "search_code", "query_memory"],
+          "validation": {
+            "report_has_sections": true,
+            "cites_sources": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "code_documentation",
+      "description": "Fetch code, generate docs, review accuracy, fix",
+      "test_cases": [
+        {
+          "input": "Document the FlowEngine struct and its execute method",
+          "expected_steps": ["fetch_code", "generate_docs", "review_accuracy", "fix"],
+          "validation": {
+            "has_struct_description": true,
+            "has_method_docs": true,
+            "has_examples": true
+          }
+        }
+      ]
+    }
+  ]
+}

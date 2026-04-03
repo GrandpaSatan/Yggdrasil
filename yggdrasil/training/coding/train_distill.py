@@ -126,7 +126,7 @@ def distill_completions(data: list[dict], teacher_url: str, teacher_model: str,
 
 
 def train_student(data_path: Path, output_dir: Path, base_model: str,
-                  epochs: int = 5, lr: float = 3e-5):
+                  epochs: int = 5, lr: float = 3e-5, lora_rank: int = 8):
     """Standard SFT training on teacher-distilled data (no grokking)."""
     import os
     os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
@@ -170,7 +170,7 @@ def train_student(data_path: Path, output_dir: Path, base_model: str,
 
     model = prepare_model_for_kbit_training(model)
     model = get_peft_model(model, LoraConfig(
-        r=8, lora_alpha=16, target_modules=target_modules,
+        r=lora_rank, lora_alpha=lora_rank * 2, target_modules=target_modules,
         lora_dropout=0.1, bias="none", task_type="CAUSAL_LM",
     ))
 
@@ -229,6 +229,8 @@ def main():
     parser.add_argument("--teacher-model", default=TEACHER_MODEL)
     parser.add_argument("--student", default=STUDENT_MODEL)
     parser.add_argument("--epochs", type=int, default=5)
+    parser.add_argument("--lora-rank", type=int, default=8,
+                        help="LoRA rank (default 8, use 16 for more capacity)")
     parser.add_argument("--skip-distill", action="store_true",
                         help="Skip teacher distillation, train on existing distilled data")
     parser.add_argument("--distill-only", action="store_true",
@@ -253,7 +255,7 @@ def main():
         return
 
     if distilled_path.exists():
-        train_student(distilled_path, args.output, args.student, args.epochs)
+        train_student(distilled_path, args.output, args.student, args.epochs, lora_rank=args.lora_rank)
     else:
         print(f"No distilled data at {distilled_path} — run without --skip-distill first")
 
