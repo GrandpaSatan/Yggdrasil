@@ -1,9 +1,9 @@
 {
-  "gemma4:26b": [
+  "gemma4:e4b": [
     {
       "task_id": "axum_handler",
       "task_name": "Axum Handler",
-      "model": "gemma4:26b",
+      "model": "gemma4:e4b",
       "passed_checks": {
         "has_state_extractor": true,
         "has_json_return": true,
@@ -14,16 +14,16 @@
       "syntax_valid": true,
       "check_score": 1.0,
       "total_score": 1.0,
-      "tokens_generated": 1705,
-      "latency_ms": 97391,
-      "tok_per_sec": 17.5,
-      "response": "use axum::{extract::State, Json};\nuse serde::Serialize;\nuse tracing::instrument;\nuse crate::state::AppState;\n\n#[derive(Serialize)]\npub struct UptimeResponse {\n    pub uptime_secs: u64,\n    pub node_name: String,\n}\n\n#[instrument(skip(state))]\npub async fn get_uptime(State(state): State<AppState>) -> Json<UptimeResponse> {\n    let uptime_secs = state.start_time.elapsed().as_secs();\n    let node_name = state.config.node_name.clone();\n\n    Json(UptimeResponse {\n        uptime_secs,\n        node_name,\n    })\n}",
+      "tokens_generated": 224,
+      "latency_ms": 30625,
+      "tok_per_sec": 7.3,
+      "response": "use axum::{extract::State, http::StatusCode, Json};\nuse serde::Serialize;\nuse std::time::Instant;\nuse tracing::instrument;\n\n#[derive(Serialize)]\npub struct UptimeResponse {\n    uptime_secs: u64,\n    node_name: String,\n}\n\n// Assuming AppState and its necessary fields exist in the scope\n// For compilation purposes, we define minimal mocks here.\npub struct AppState {\n    pub start_time: Instant,\n    pub config: Config,\n}\n\npub struct Config {\n    pub node_name: String,\n}\n\n#[instrument(skip(state))]\npub async fn get_uptime(state: State<AppState>) -> Json<UptimeResponse> {\n    let uptime = state.start_time.elapsed().as_secs();\n    let response = UptimeResponse {\n        uptime_secs: uptime,\n        node_name: state.config.node_name.clone(),\n    };\n    Json(response)\n}",
       "error": ""
     },
     {
       "task_id": "config_struct",
       "task_name": "Config Struct",
-      "model": "gemma4:26b",
+      "model": "gemma4:e4b",
       "passed_checks": {
         "has_derive": true,
         "has_serde_default": true,
@@ -34,90 +34,90 @@
       "syntax_valid": true,
       "check_score": 1.0,
       "total_score": 1.0,
-      "tokens_generated": 1728,
-      "latency_ms": 94163,
-      "tok_per_sec": 18.4,
-      "response": "use serde::{Deserialize, Serialize};\n\n#[derive(Debug, Clone, Serialize, Deserialize)]\npub struct NotificationConfig {\n    #[serde(default = \"default_enabled\")]\n    pub enabled: bool,\n    pub webhook_url: Option<String>,\n    #[serde(default = \"default_retry_count\")]\n    pub retry_count: u32,\n    #[serde(default = \"default_timeout_secs\")]\n    pub timeout_secs: u64,\n    #[serde(default = \"default_channels\")]\n    pub channels: Vec<String>,\n}\n\nfn default_enabled() -> bool {\n    false\n}\n\nfn default_retry_count() -> u32 {\n    3\n}\n\nfn default_timeout_secs() -> u64 {\n    10\n}\n\nfn default_channels() -> Vec<String> {\n    Vec::new()\n}",
+      "tokens_generated": 220,
+      "latency_ms": 24924,
+      "tok_per_sec": 8.8,
+      "response": "use serde::{Deserialize, Serialize};\n\n#[derive(Debug, Clone, Serialize, Deserialize)]\npub struct NotificationConfig {\n    #[serde(default = \"default_enabled\")]\n    pub enabled: bool,\n    #[serde(default = \"default_webhook_url\")]\n    pub webhook_url: Option<String>,\n    #[serde(default = \"default_retry_count\")]\n    pub retry_count: u32,\n    #[serde(default = \"default_timeout_secs\")]\n    pub timeout_secs: u64,\n    #[serde(default = \"default_channels\")]\n    pub channels: Vec<String>,\n}\n\nfn default_enabled() -> bool { false }\nfn default_webhook_url() -> Option<String> { None }\nfn default_retry_count() -> u32 { 3 }\nfn default_timeout_secs() -> u64 { 10 }\nfn default_channels() -> Vec<String> { Vec::new() }",
       "error": ""
     },
     {
       "task_id": "test_generation",
       "task_name": "Test Generation",
-      "model": "gemma4:26b",
+      "model": "gemma4:e4b",
       "passed_checks": {
         "has_cfg_test": true,
         "has_mod_tests": true,
         "has_test_attr": true,
         "has_assert": true,
-        "min_test_count": false
+        "min_test_count": true
       },
       "syntax_valid": true,
-      "check_score": 0.8,
-      "total_score": 0.92,
-      "tokens_generated": 2048,
-      "latency_ms": 112692,
-      "tok_per_sec": 18.2,
-      "response": "#[cfg(test)]\nmod tests {\n    use super::*;\n    use std::env;\n\n    #[test]\n    fn test_expand_env_vars_basic_substitution() {\n        env::set_var(\"YGG_TEST_VAR\", \"yggdrasil\");\n        let input = \"Welcome to ${YGG_TEST_VAR}!\";\n        let expected = \"Welcome to yggdrasil!\";\n        assert_eq!(expand_env_vars(input), expected);\n        env::remove",
+      "check_score": 1.0,
+      "total_score": 1.0,
+      "tokens_generated": 613,
+      "latency_ms": 38865,
+      "tok_per_sec": 15.8,
+      "response": "#[cfg(test)]\nmod tests {\n    use super::expand_env_vars;\n\n    #[test]\n    fn test_basic_substitution() {\n        // Setup environment variable for testing\n        std::env::set_var(\"TEST_VAR\", \"test_value\");\n        let input = \"Hello ${TEST_VAR}!\";\n        let expected = \"Hello test_value!\";\n        assert_eq!(expand_env_vars(input), expected);\n        // Cleanup\n        std::env::remove_var(\"TEST_VAR\");\n    }\n\n    #[test]\n    fn test_missing_var_leaves_placeholder_intact() {\n        // Ensure a variable that is not set is used\n        let input = \"This has ${NON_EXISTENT_VAR} and ${ANOTHER_MISSING}\";\n        let expected = \"This has ${NON_EXISTENT_VAR} and ${ANOTHER_MISSING}\";\n        assert_eq!(expand_env_vars(input), expected);\n    }\n\n    #[test]\n    fn test_multiple_vars_substitution() {\n        // Setup multiple environment variables\n        std::env::set_var(\"VAR1\", \"value1\");\n        std::env::set_var(\"VAR2\", \"value2\");\n        let input = \"Combined: ${VAR1} and ${VAR2}\";\n        let expected = \"Combined: value1 and value2\";\n        let result = expand_env_vars(input);\n        assert_eq!(result, expected);\n\n        // Cleanup\n        std::env::remove_var(\"VAR1\");\n        std::env::remove_var(\"VAR2\");\n    }\n\n    #[test]\n    fn test_no_vars_passthrough() {\n        let input = \"This string contains no environment variables.\";\n        let expected = \"This string contains no environment variables.\";\n        assert_eq!(expand_env_vars(input), expected);\n    }\n\n    #[test]\n    fn test_empty_input() {\n        let input = \"\";\n        let expected = \"\";\n        assert_eq!(expand_env_vars(input), expected);\n    }\n\n    #[test]\n    fn test_mixed_content() {\n        // Setup environment variable\n        std::env::set_var(\"PATH_PREFIX\", \"/opt/yggdrasil\");\n        let input = \"Path is: ${PATH_PREFIX}/bin, and static text.\";\n        let expected = \"Path is: /opt/yggdrasil/bin, and static text.\";\n        let result = expand_env_vars(input);\n        assert_eq!(result, expected",
       "error": ""
     },
     {
       "task_id": "error_variant",
       "task_name": "Error Variant",
-      "model": "gemma4:26b",
+      "model": "gemma4:e4b",
       "passed_checks": {
         "has_config_error": true,
         "has_rate_limited": true,
         "has_from_impl": true,
         "has_thiserror": true,
-        "has_retry_after": true
+        "has_retry_after": false
       },
       "syntax_valid": true,
-      "check_score": 1.0,
-      "total_score": 1.0,
-      "tokens_generated": 1604,
-      "latency_ms": 86705,
-      "tok_per_sec": 18.5,
-      "response": "use thiserror::Error;\n\n#[derive(Debug, Error)]\npub enum OdinError {\n    #[error(\"config error: {0}\")]\n    ConfigError(#[from] ygg_config::ConfigError),\n\n    #[error(\"rate limited, retry after {retry_after_secs}s\")]\n    RateLimited { retry_after_secs: u64 },\n\n    #[error(\"backend unavailable: {0}\")]\n    BackendUnavailable(String),\n\n    #[error(\"request timeout after {0}s\")]\n    Timeout(u64),\n\n    #[error(\"model not found: {0}\")]\n    ModelNotFound(String),\n}\n\nimpl From<reqwest::Error> for OdinError {\n    fn from(err: reqwest::Error) -> Self {\n        Self::BackendUnavailable(err.to_string())\n    }\n}",
+      "check_score": 0.8,
+      "total_score": 0.92,
+      "tokens_generated": 192,
+      "latency_ms": 32317,
+      "tok_per_sec": 5.9,
+      "response": "use thiserror::Error;\nuse ygg_config::ConfigError;\nuse reqwest;\n\n#[derive(Debug, Error)]\npub enum OdinError {\n    #[error(\"backend unavailable: {0}\")]\n    BackendUnavailable(String),\n    #[error(\"request timeout after {0}s\")]\n    Timeout(u64),\n    #[error(\"model not found: {0}\")]\n    ModelNotFound(String),\n    #[error(\"configuration error: {0}\")]\n    Config(#[from] ConfigError),\n    #[error(\"rate limited; retry after {0} seconds\")]\n    RateLimited(u64),\n}\n\nimpl From<reqwest::Error> for OdinError {\n    fn from(err: reqwest::Error) -> Self {\n        OdinError::BackendUnavailable(format!(\"HTTP request failed: {}\", err))\n    }\n}",
       "error": ""
     },
     {
       "task_id": "tool_registration",
       "task_name": "Tool Registration",
-      "model": "gemma4:26b",
+      "model": "gemma4:e4b",
       "passed_checks": {
-        "has_tool_spec": false,
-        "has_safe_tier": false,
+        "has_tool_spec": true,
+        "has_safe_tier": true,
         "has_schema": false,
-        "has_properties": false,
-        "has_keywords": false
+        "has_properties": true,
+        "has_keywords": true
       },
       "syntax_valid": true,
-      "check_score": 0.0,
-      "total_score": 0.3,
-      "tokens_generated": 2048,
-      "latency_ms": 113295,
-      "tok_per_sec": 18.1,
-      "response": "",
+      "check_score": 0.8,
+      "total_score": 0.92,
+      "tokens_generated": 633,
+      "latency_ms": 45830,
+      "tok_per_sec": 13.8,
+      "response": "pub struct ToolSpec {\n    pub name: &'static str,\n    pub description: &'static str,\n    pub tier: ToolTier,\n    pub endpoint: ToolEndpoint,\n    pub schema: serde_json::Value,\n    pub keywords: &'static [&'static str],\n}\n\npub enum ToolTier { Safe, Restricted, Blocked }\npub enum ToolEndpoint { Mimir, Muninn, OdinSelf, Ha(HaToolKind) }\n\npub struct ToolSpec {\n    pub name: &'static str,\n    pub description: &'static str,\n    pub tier: ToolTier,\n    pub endpoint: ToolEndpoint,\n    pub schema: serde_json::Value,\n    pub keywords: &'static [&'static str],\n}\n\npub enum ToolTier { Safe, Restricted, Blocked }\npub enum ToolEndpoint { Mimir, Muninn, OdinSelf, Ha(HaToolKind) }\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n    use serde_json::{json, Value};\n\n    fn get_deploy_status_tool_spec() -> ToolSpec {\n        ToolSpec {\n            name: \"deploy_status_tool\",\n            description: \"Checks deployment status across nodes.\",\n            tier: ToolTier::Safe,\n            endpoint: ToolEndpoint::OdinSelf,\n            schema: json!({\n                \"@type\": \"object\",\n                \"properties\": {\n                    \"node_name\": {\n                        \"description\": \"The name of the node to check.\",\n                        \"type\": \"string\"\n                    },\n                    \"service_name\": {\n                        \"description\": \"Optional name of the service.\",\n                        \"type\": [\"string\", \"null\"]\n                    }\n                },\n                \"required\": [\"node_name\"]\n            }),\n            keywords: &[\"deploy\", \"status\", \"service\", \"version\", \"node\"],\n        }\n    }\n\n    #[tokio::test]\n    async fn test_deploy_status_tool_spec_generation() {\n        let spec = get_deploy_status_tool_spec();\n        assert_eq!(spec.name, \"deploy_status_tool\");\n        assert_eq!(spec.tier, ToolTier::Safe);\n        assert!(matches!(spec.endpoint, ToolEndpoint::OdinSelf));\n        assert_eq!(spec.keywords, &[\"deploy\", \"status\", \"service\", \"version\", \"",
       "error": ""
     },
     {
       "task_id": "yaml_extraction",
       "task_name": "Structured Output Parser",
-      "model": "gemma4:26b",
+      "model": "gemma4:e4b",
       "passed_checks": {
-        "has_fn_signature": false,
-        "has_regex_or_find": false,
-        "has_none_return": false,
-        "has_some_return": false,
-        "has_trim": false
+        "has_fn_signature": true,
+        "has_regex_or_find": true,
+        "has_none_return": true,
+        "has_some_return": true,
+        "has_trim": true
       },
       "syntax_valid": true,
-      "check_score": 0.0,
-      "total_score": 0.3,
-      "tokens_generated": 2048,
-      "latency_ms": 112519,
-      "tok_per_sec": 18.2,
-      "response": "",
+      "check_score": 1.0,
+      "total_score": 1.0,
+      "tokens_generated": 794,
+      "latency_ms": 40504,
+      "tok_per_sec": 19.6,
+      "response": "use regex::Regex;\n\npub fn extract_yaml(response: &str) -> Option<String> {\n    // 1. Try to find ```yaml ... ``` fenced block first\n    let fence_regex = Regex::new(r\"```yaml\\s*([\\s\\S]*?)\\s*```\").unwrap();\n    if let Some(caps) = fence_regex.captures(response) {\n        let yaml_content = caps[1].trim().to_string();\n        if !yaml_content.is_empty() {\n            return Some(yaml_content);\n        }\n    }\n\n    // 2. If no fence, try to find content starting with a YAML key (line matching /^\\w+:/)\n    // This regex looks for content that seems structured like YAML, assuming it starts near the beginning\n    // or is the primary block of text. We'll capture everything that looks like it might be YAML\n    // until we hit a clear non-YAML structure (like a paragraph break or unrelated text).\n    // A simpler heuristic for raw YAML is to capture blocks that start with a key: value pattern.\n    let raw_yaml_regex = Regex::new(r\"^\\s*([\\w-]+:\\s*.*(?:\\n[\\s\\w-]+:\\s*.*)*)\").unwrap();\n\n    // We iterate over lines and check if they look like YAML key: value pairs.\n    let mut lines: Vec<&str> = response.lines().collect();\n    let mut potential_yaml_lines: Vec<&str> = Vec::new();\n    let mut found_start = false;\n\n    for line in lines {\n        let trimmed_line = line.trim();\n        if trimmed_line.is_empty() {\n            continue;\n        }\n\n        // Check if the line starts with a key followed by a colon (basic YAML key check)\n        if trimmed_line.contains(':') && !trimmed_line.starts_with(\"---\") && !trimmed_line.starts_with(\"...\"); {\n            if !found_start {\n                // Assume the first line that looks like YAML starts the block\n                found_start = true;\n            }\n            potential_yaml_lines.push(line);\n        } else if found_start {\n            // If we were in a YAML block and the current line doesn't look like YAML,\n            // we might assume the block has ended, but to be safe, we keep accumulating\n            // until we hit a ",
       "error": ""
     }
   ]

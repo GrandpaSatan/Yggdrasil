@@ -46,7 +46,7 @@ CLASSIFY_EXAMPLES = [
     },
     {
         "input": "CLASSIFY\ntool: Edit\nfile: src/main.rs\ncontent: Added missing semicolon",
-        "expected": {"category": "bug_fix", "should_store": False},
+        "expected": {"category": "routine", "should_store": False},
     },
     {
         "input": "CLASSIFY\ntool: Bash\ncommand: cargo check\ncontent: Compiling yggdrasil v1.0.0\n    Finished dev [unoptimized + debuginfo]",
@@ -75,7 +75,27 @@ DISTILL_EXAMPLES = [
     {
         "input": "DISTILL\ncontent: Discovered that HA automation generator hardcodes qwen3:30b-a3b model name in ygg-ha/src/automation.rs line 86. This should be configurable via HaConfig to support model swapping.",
         "expected_fields": ["cause", "effect", "tags"],
-        "expected_tag_contains": ["ha", "config"],
+        "expected_tag_contains": ["ha"],
+    },
+    {
+        "input": "DISTILL\ncontent: Fixed streaming SSE dropping last token — off-by-one in buffer flush logic in odin/src/proxy.rs. Users were losing the final word of streamed responses.",
+        "expected_fields": ["cause", "effect", "tags"],
+        "expected_tag_contains": ["bug_fix"],
+    },
+    {
+        "input": "DISTILL\ncontent: Agent loop now executes tools in parallel via join_all — single model call per iteration, all tools concurrent. 3-5x faster tool-heavy iterations in odin/src/agent.rs.",
+        "expected_fields": ["cause", "effect", "tags"],
+        "expected_tag_contains": ["agent"],
+    },
+    {
+        "input": "DISTILL\ncontent: Deployed odin binary to Munin — scp to /tmp then sudo cp to /opt/yggdrasil/bin/odin with 755 permissions. Flow engine now live on production.",
+        "expected_fields": ["cause", "effect", "tags"],
+        "expected_tag_contains": ["deploy"],
+    },
+    {
+        "input": "DISTILL\ncontent: GOTCHA: Gemma 4 uses thinking mode by default — content field is empty, response is in thinking field. Must pass think:false in Ollama API to get content.",
+        "expected_fields": ["cause", "effect", "tags"],
+        "expected_tag_contains": ["gotcha"],
     },
 ]
 

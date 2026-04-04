@@ -214,23 +214,79 @@ DISTILL_PAIRS = {
 }
 
 
-def generate_distill_example(tool: str, file_path: str, content: str, category: str) -> dict:
-    """Generate a single DISTILL training example with proper cause/effect separation."""
-    user_msg = f"DISTILL\ntool: {tool}\nfile: {file_path}\ncontent: {content}"
-
-    # Use pre-written cause/effect pairs when available
-    pairs = DISTILL_PAIRS.get(category, [])
-    if pairs:
-        cause, effect = random.choice(pairs)
-    else:
-        cause = content[:150].strip()
-        effect = content[:200].strip()
-
-    # Generate tags
+def extract_tags_from_content(content: str, file_path: str, category: str) -> list:
+    """Extract meaningful tags from content text and file path."""
     tags = [category]
+
+    # Extract from file path
     if file_path:
         parts = file_path.replace("/", ".").split(".")
-        tags.extend([p for p in parts if len(p) > 2 and p not in ("src", "rs", "py", "ts")][:2])
+        tags.extend([p.lower() for p in parts if len(p) > 2 and p not in ("src", "rs", "py", "ts", "md")])
+
+    # Extract keywords from content
+    # Common Yggdrasil terms to look for
+    keywords = [
+        "odin", "mimir", "muninn", "huginn", "saga", "qdrant", "ollama",
+        "munin", "hugin", "morrigan", "hades", "nightjar", "plume", "thor",
+        "rocm", "cuda", "igpu", "egpu", "gpu", "vram",
+        "session", "timeout", "config", "router", "proxy", "agent",
+        "flow", "pipeline", "sdr", "engram", "memory", "voice", "tts", "stt",
+        "ha", "automation", "home assistant", "systemd", "deploy",
+        "lora", "grokking", "fine-tuning", "distillation", "benchmark",
+        "vlan", "port", "api", "webhook", "streaming", "sse",
+        "gemma", "qwen", "lfm", "bonsai", "llama",
+    ]
+    content_lower = content.lower()
+    for kw in keywords:
+        if kw in content_lower and kw not in tags:
+            tags.append(kw)
+            if len(tags) >= 5:
+                break
+
+    return tags[:5]
+
+
+def derive_cause_effect(content: str) -> tuple:
+    """Derive cause and effect from content text."""
+    # Try splitting on common separators
+    for sep in [" — ", " - ", ". ", " — "]:
+        if sep in content:
+            parts = content.split(sep, 1)
+            if len(parts[0]) > 10 and len(parts[1]) > 10:
+                return parts[0].strip(), parts[1].strip()
+
+    # For content without clear separator, use as cause and derive effect
+    if len(content) > 100:
+        return content[:len(content)//2].strip(), content[len(content)//2:].strip()
+    return content.strip(), content.strip()
+
+
+def generate_distill_example(tool: str, file_path: str, content: str, category: str) -> dict:
+    """Generate a single DISTILL training example with content-derived cause/effect."""
+    user_msg = f"DISTILL\ntool: {tool}\nfile: {file_path}\ncontent: {content}"
+
+    # Derive cause/effect FROM the actual content (not random pairs)
+    cause, effect = derive_cause_effect(content)
+
+    # Use pre-written pairs only when content matches (by keyword overlap)
+    pairs = DISTILL_PAIRS.get(category, [])
+    if pairs:
+        # Find the best-matching pair based on keyword overlap with content
+        content_words = set(content.lower().split())
+        best_score = 0
+        best_pair = None
+        for p_cause, p_effect in pairs:
+            pair_words = set(p_cause.lower().split()) | set(p_effect.lower().split())
+            overlap = len(content_words & pair_words)
+            if overlap > best_score:
+                best_score = overlap
+                best_pair = (p_cause, p_effect)
+        # Only use pre-written pair if there's meaningful overlap (>3 words)
+        if best_pair and best_score > 3:
+            cause, effect = best_pair
+
+    # Extract tags from content and file path
+    tags = extract_tags_from_content(content, file_path, category)
 
     assistant_msg = json.dumps({
         "cause": cause,
@@ -336,8 +392,8 @@ def main():
         should_store = data["should_store"]
         base_examples = data["examples"]
 
-        # More examples for weak categories (routine, gotcha)
-        count = 150 if category in ("routine", "gotcha") else 80
+        # Heavy oversampling — 300 per category, 500 for routine/gotcha
+        count = 500 if category in ("routine", "gotcha") else 300
         augmented = augment_examples(base_examples, category, should_store, target_count=count)
 
         for tool, file_path, content in augmented:

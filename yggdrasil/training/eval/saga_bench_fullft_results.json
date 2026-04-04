@@ -1,13 +1,13 @@
 [
   {
     "task_type": "CLASSIFY",
-    "model": "lfm-saga-v4.gguf",
+    "model": "saga-fullft-350m-f16.gguf",
     "total": 8,
     "valid_json": 8,
-    "correct": 5,
-    "accuracy": 0.625,
+    "correct": 8,
+    "accuracy": 1.0,
     "json_rate": 1.0,
-    "latency_avg_ms": 221.35756362558823,
+    "latency_avg_ms": 211.95350249945477,
     "details": [
       {
         "input": "CLASSIFY\ntool: Edit\nfile: odin/src/handlers.rs\ncontent: Fixed session timeout bu",
@@ -20,10 +20,10 @@
       {
         "input": "CLASSIFY\ntool: Edit\nfile: ygg-domain/src/config.rs\ncontent: Added BackendConfig ",
         "expected_cat": "architecture_decision",
-        "got_cat": "deployment_change",
+        "got_cat": "architecture_decision",
         "expected_store": true,
         "got_store": true,
-        "correct": false
+        "correct": true
       },
       {
         "input": "CLASSIFY\ntool: Edit\nfile: sprints/sprint-054.md\ncontent: Sprint 054 started \u2014 LL",
@@ -44,10 +44,10 @@
       {
         "input": "CLASSIFY\ntool: Bash\ncommand: cargo check\ncontent: Compiling yggdrasil v1.0.0\n   ",
         "expected_cat": "routine",
-        "got_cat": "deployment_change",
+        "got_cat": "routine",
         "expected_store": false,
-        "got_store": true,
-        "correct": false
+        "got_store": false,
+        "correct": true
       },
       {
         "input": "CLASSIFY\ntool: Edit\nfile: deploy/munin/odin.service\ncontent: Changed OLLAMA_MAX_",
@@ -60,10 +60,10 @@
       {
         "input": "CLASSIFY\ntool: Read\nfile: README.md\ncontent: # Yggdrasil\\nAI homelab orchestrato",
         "expected_cat": "routine",
-        "got_cat": "deployment_change",
+        "got_cat": "routine",
         "expected_store": false,
-        "got_store": true,
-        "correct": false
+        "got_store": false,
+        "correct": true
       },
       {
         "input": "CLASSIFY\ntool: Edit\nfile: odin/src/proxy.rs\ncontent: GOTCHA: Ollama returns newl",
@@ -77,23 +77,19 @@
   },
   {
     "task_type": "DISTILL",
-    "model": "lfm-saga-v4.gguf",
+    "model": "saga-fullft-350m-f16.gguf",
     "total": 2,
     "valid_json": 2,
     "correct": 0,
     "accuracy": 0.0,
     "json_rate": 1.0,
-    "latency_avg_ms": 409.92258400183346,
+    "latency_avg_ms": 378.8959099947533,
     "details": [
       {
         "input": "DISTILL\ncontent: Sprint 053 found that Munin's Ollama uses AMD RX 9060 XT eGPU v",
-        "has_fields": true,
+        "has_fields": false,
         "has_expected_tags": false,
-        "got_tags": [
-          "sprint_lifecycle",
-          "sprint_053",
-          "sprint_054"
-        ],
+        "got_tags": [],
         "correct": false
       },
       {
@@ -101,9 +97,9 @@
         "has_fields": true,
         "has_expected_tags": false,
         "got_tags": [
-          "deployment_change",
-          "discovery",
-          "saga"
+          "bug_fix",
+          "yggda",
+          "content"
         ],
         "correct": false
       }
@@ -111,13 +107,13 @@
   },
   {
     "task_type": "STORE_SKIP",
-    "model": "lfm-saga-v4.gguf",
+    "model": "saga-fullft-350m-f16.gguf",
     "total": 6,
     "valid_json": 6,
-    "correct": 4,
-    "accuracy": 0.6666666666666666,
+    "correct": 6,
+    "accuracy": 1.0,
     "json_rate": 1.0,
-    "latency_avg_ms": 204.61805516667178,
+    "latency_avg_ms": 249.11277716698046,
     "details": [
       {
         "input": "CLASSIFY\ncontent: Migrated all nodes from VLAN 25 to VLAN 65 \u2014 new IP range 10.0",
@@ -134,14 +130,14 @@
       {
         "input": "CLASSIFY\ncontent: Updated import order in handlers.rs",
         "expected": false,
-        "got": true,
-        "correct": false
+        "got": false,
+        "correct": true
       },
       {
         "input": "CLASSIFY\ncontent: cargo fmt -- all files",
         "expected": false,
-        "got": true,
-        "correct": false
+        "got": false,
+        "correct": true
       },
       {
         "input": "CLASSIFY\ncontent: git status\nM odin/src/main.rs",

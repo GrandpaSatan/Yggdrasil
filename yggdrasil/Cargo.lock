@@ -2547,6 +2547,7 @@ dependencies = [
  "metrics",
  "metrics-exporter-prometheus",
  "rand 0.8.5",
+ "regex",
  "reqwest 0.12.28",
  "rustfft",
  "sd-notify",
@@ -5712,6 +5713,7 @@ name = "ygg-mcp"
 version = "1.0.0"
 dependencies = [
  "chromiumoxide",
+ "chrono",
  "futures",
  "reqwest 0.12.28",
  "rmcp",
