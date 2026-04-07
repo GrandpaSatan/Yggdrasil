@@ -350,7 +350,8 @@ pub struct AutoIngestConfig {
 
 /// Configuration for Saga async enrichment of auto-ingested engrams.
 ///
-/// Saga (Qwen3 0.6B fine-tuned for memory classification) runs in Ollama.
+/// Saga (LFM2.5-1.2B-Instruct or saga-350m specialist) runs via OpenAI-compatible
+/// `/v1/chat/completions` endpoint (llama-server or Odin).
 /// After the fast cosine gate stores an engram, a fire-and-forget task calls
 /// Saga to verify should_store and distill structured cause/effect/tags.
 #[derive(Debug, Clone, Deserialize, Serialize)]

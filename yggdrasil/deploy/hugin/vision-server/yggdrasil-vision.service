@@ -1,0 +1,16 @@
+[Unit]
+Description=Yggdrasil LFM2.5-VL Vision Server (Hugin CPU)
+After=network.target
+
+[Service]
+Type=simple
+User=jhernandez
+WorkingDirectory=/opt/yggdrasil/deploy/hugin/vision-server
+ExecStart=/opt/yggdrasil/deploy/hugin/vision-server/.venv/bin/python3 server.py --port 9096
+Restart=on-failure
+RestartSec=30
+TimeoutStartSec=300
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
