@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""LFM2.5-VL Vision Server — Hugin CPU inference.
+"""LFM2.5-VL Vision Server — Hugin ROCm GPU inference.
 
 Serves LiquidAI/LFM2.5-VL-1.6B via FastAPI with OpenAI-compatible
 /v1/chat/completions endpoint for image+text understanding.
 
-Runs on Hugin's AMD Ryzen AI 9 HX 370 CPU (fp32).
-Future: migrate to NPU (AMD XDNA) when supported.
+Runs on Hugin's ROCm GPU (RX 9060 XT or 890M iGPU) in fp16.
+Falls back to CPU fp32 if no GPU detected.
 
 Usage:
     python server.py [--port 9096] [--model LiquidAI/LFM2.5-VL-1.6B]
@@ -93,6 +93,7 @@ def chat_completions(req: ChatRequest):
 
     text = processor.apply_chat_template(chat_messages, add_generation_prompt=True, tokenize=False)
     inputs = processor(text=text, images=images if images else None, return_tensors="pt")
+    inputs = inputs.to(model.device)
 
     start = time.time()
     with torch.no_grad():
@@ -143,11 +144,22 @@ def main():
     model_id = args.model
     print(f"Loading {model_id}...")
     processor = AutoProcessor.from_pretrained(model_id)
-    model = AutoModelForImageTextToText.from_pretrained(
-        model_id,
-        dtype=torch.float32,
-        device_map="cpu",
-    )
+
+    # Use ROCm GPU if available, fall back to CPU
+    if torch.cuda.is_available():
+        print(f"ROCm GPU detected: {torch.cuda.get_device_name(0)}")
+        model = AutoModelForImageTextToText.from_pretrained(
+            model_id,
+            dtype=torch.float16,
+            device_map="auto",
+        )
+    else:
+        print("No GPU detected, using CPU (fp32)")
+        model = AutoModelForImageTextToText.from_pretrained(
+            model_id,
+            dtype=torch.float32,
+            device_map="cpu",
+        )
     model.eval()
     print(f"Model loaded: {sum(p.numel() for p in model.parameters()) / 1e6:.1f}M params")
 

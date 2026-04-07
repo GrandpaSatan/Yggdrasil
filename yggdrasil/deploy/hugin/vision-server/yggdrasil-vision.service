@@ -1,5 +1,5 @@
 [Unit]
-Description=Yggdrasil LFM2.5-VL Vision Server (Hugin CPU)
+Description=Yggdrasil LFM2.5-VL Vision Server (Hugin ROCm GPU)
 After=network.target
 
 [Service]
@@ -11,6 +11,8 @@ Restart=on-failure
 RestartSec=30
 TimeoutStartSec=300
 Environment=PYTHONUNBUFFERED=1
+Environment=ROCR_VISIBLE_DEVICES=1
+Environment=HSA_OVERRIDE_GFX_VERSION=11.0.0
 
 [Install]
 WantedBy=multi-user.target
