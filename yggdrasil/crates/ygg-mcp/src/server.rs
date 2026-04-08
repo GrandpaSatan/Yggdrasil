@@ -807,6 +807,7 @@ impl YggdrasilServer {
                 let params = QueryMemoryParams {
                     text: prefetch_query,
                     limit: Some(10),
+                    tags: None,
                 };
                 let result = query_memory(&prefetch_client, &prefetch_config, params).await;
                 let text = result

@@ -1058,7 +1058,7 @@ pub async fn chat_handler(
             intent = %decision.intent,
             "dispatching to multi-model flow"
         );
-        let result = state.flow_engine.execute(flow, &last_user_message).await?;
+        let result = state.flow_engine.execute(flow, &last_user_message, Some(&state)).await?;
         let response_text = result.final_output().to_string();
 
         // Update session with flow result

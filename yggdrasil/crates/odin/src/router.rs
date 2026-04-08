@@ -158,10 +158,23 @@ fn gaming_keywords() -> Vec<String> {
     .collect()
 }
 
+fn research_keywords() -> Vec<String> {
+    [
+        "research", "investigate", "deep dive", "comprehensive analysis",
+        "literature review", "survey", "compare approaches", "state of the art",
+        "what are the options", "explore alternatives", "find out",
+        "summarize findings", "gather information", "look into",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
+}
+
 fn keywords_for_intent(intent: &str) -> Vec<String> {
     match intent {
         "coding" => coding_keywords(),
         "reasoning" => reasoning_keywords(),
+        "research" => research_keywords(),
         // Both "home_assistant" (legacy) and "home_automation" (Sprint 007 spec)
         // share the same keyword set so either config name works.
         "home_assistant" | "home_automation" => ha_keywords(),

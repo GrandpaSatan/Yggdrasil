@@ -176,15 +176,25 @@
     },
     {
       "name": "research",
-      "description": "Decompose question, search tools, synthesize report",
+      "description": "7-step research pipeline: decompose, plan, search internal + external, filter, synthesize, store",
       "test_cases": [
         {
           "input": "What are the performance characteristics of LFM2 models on edge hardware?",
-          "expected_steps": ["decompose", "search", "synthesize"],
-          "tools_available": ["web_search", "search_code", "query_memory"],
+          "expected_steps": ["decompose", "plan", "search_internal", "search_external", "filter", "synthesize", "store"],
+          "tools_available": ["web_search", "search_code", "query_memory", "memory_timeline", "search_documents", "store_memory"],
           "validation": {
             "report_has_sections": true,
-            "cites_sources": true
+            "cites_sources": true,
+            "stored_as_engram": true
+          }
+        },
+        {
+          "input": "Compare RWKV-7 vs Mamba-3 for long-context inference on consumer GPUs",
+          "expected_steps": ["decompose", "plan", "search_internal", "search_external", "filter", "synthesize", "store"],
+          "tools_available": ["web_search", "query_memory", "search_documents", "store_memory"],
+          "validation": {
+            "report_has_sections": true,
+            "discusses_tradeoffs": true
           }
         }
       ]

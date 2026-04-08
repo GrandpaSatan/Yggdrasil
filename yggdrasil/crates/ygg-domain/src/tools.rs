@@ -299,6 +299,31 @@ pub static ALL_TOOLS: &[ToolMeta] = &[
         keywords: &["network", "topology", "nodes", "mesh"],
         voice_always: false,
     },
+    ToolMeta {
+        name: "search_documents",
+        description: "Search ingested documents (PDFs, markdown, text) using hybrid vector + keyword search. Returns matching chunks with source URIs and similarity scores.",
+        tier: ToolTier::Safe,
+        timeout_override_secs: None,
+        keywords: &["document", "documentation", "paper", "book", "pdf", "manual"],
+        voice_always: false,
+    },
+    // ── Research-specific tools ──────────────────────────────────
+    ToolMeta {
+        name: "ingest_document",
+        description: "Ingest a document into the research corpus. Chunks the content, generates embeddings, and stores for later search. Supports markdown, plain text, and structured documents.",
+        tier: ToolTier::Restricted,
+        timeout_override_secs: Some(60),
+        keywords: &[],
+        voice_always: false,
+    },
+    ToolMeta {
+        name: "research_report",
+        description: "Format research findings into a structured report and store as an engram. Takes the original query and synthesized findings, produces a tagged engram for future recall.",
+        tier: ToolTier::Restricted,
+        timeout_override_secs: None,
+        keywords: &[],
+        voice_always: false,
+    },
 ];
 
 /// Look up a tool's metadata by name.

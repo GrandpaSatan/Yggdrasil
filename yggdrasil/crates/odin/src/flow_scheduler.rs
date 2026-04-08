@@ -94,7 +94,7 @@ pub fn spawn_scheduler(
                                 "triggering idle flow"
                             );
 
-                            match state.flow_engine.execute(flow, "consolidate").await {
+                            match state.flow_engine.execute(flow, "consolidate", Some(&state)).await {
                                 Ok(result) => {
                                     tracing::info!(
                                         flow = %flow.name,
@@ -139,7 +139,7 @@ pub fn spawn_scheduler(
                                     "triggering cron flow"
                                 );
 
-                                match state.flow_engine.execute(flow, "scheduled").await {
+                                match state.flow_engine.execute(flow, "scheduled", Some(&state)).await {
                                     Ok(result) => {
                                         tracing::info!(
                                             flow = %flow.name,

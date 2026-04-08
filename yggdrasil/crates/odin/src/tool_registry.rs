@@ -152,6 +152,11 @@ pub fn build_registry() -> Vec<ToolSpec> {
         from_catalog("delegate",           ToolEndpoint::OdinSelf("/v1/chat/completions")),
         from_catalog("task_delegate",      ToolEndpoint::OdinSelf("/v1/chat/completions")),
         from_catalog("diff_review",        ToolEndpoint::OdinSelf("/v1/chat/completions")),
+
+        // ── Research flow tools (Sprint 056) ───────────────────
+        from_catalog("search_documents",   ToolEndpoint::Muninn("/api/v1/documents/search")),
+        from_catalog("ingest_document",    ToolEndpoint::Mimir("/api/v1/documents/ingest")),
+        from_catalog("research_report",    ToolEndpoint::Mimir("/api/v1/store")),
     ]
 }
 
@@ -437,13 +442,13 @@ mod tests {
     #[test]
     fn registry_has_correct_counts() {
         let registry = build_registry();
-        assert_eq!(registry.len(), 30);
+        assert_eq!(registry.len(), 33);
 
         let safe = registry.iter().filter(|s| s.tier == ToolTier::Safe).count();
         let restricted = registry.iter().filter(|s| s.tier == ToolTier::Restricted).count();
         let blocked = registry.iter().filter(|s| s.tier == ToolTier::Blocked).count();
-        assert_eq!(safe, 14);
-        assert_eq!(restricted, 16);
+        assert_eq!(safe, 15);
+        assert_eq!(restricted, 18);
         assert_eq!(blocked, 0);
     }
 
@@ -462,7 +467,7 @@ mod tests {
     fn tier_filtering_safe_only() {
         let registry = build_registry();
         let defs = to_tool_definitions(&registry, &[ToolTier::Safe]);
-        assert_eq!(defs.len(), 14);
+        assert_eq!(defs.len(), 15);
         for def in &defs {
             assert_eq!(def.tool_type, "function");
         }
@@ -472,7 +477,7 @@ mod tests {
     fn tier_filtering_safe_and_restricted() {
         let registry = build_registry();
         let defs = to_tool_definitions(&registry, &[ToolTier::Safe, ToolTier::Restricted]);
-        assert_eq!(defs.len(), 30);
+        assert_eq!(defs.len(), 33);
     }
 
     #[test]

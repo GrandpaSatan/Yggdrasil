@@ -2013,6 +2013,7 @@ pub async fn task_delegate(
             let p = QueryMemoryParams {
                 text,
                 limit: Some(5),
+                tags: None,
             };
             query_memory(&c, &cfg, p).await
         })
@@ -2704,6 +2705,7 @@ pub async fn diff_review(
         let p = QueryMemoryParams {
             text: description.to_string(),
             limit: Some(5),
+            tags: None,
         };
         let result = query_memory(client, config, p).await;
         result
@@ -2782,6 +2784,7 @@ pub async fn context_bridge(
             let p = QueryMemoryParams {
                 text: query_text,
                 limit: Some(10),
+                tags: None,
             };
             let memory_result = query_memory(client, config, p).await;
             let context = memory_result
@@ -2831,6 +2834,7 @@ pub async fn context_bridge(
             let p = QueryMemoryParams {
                 text: format!("context_bridge:export:{}", label),
                 limit: Some(1),
+                tags: None,
             };
             let result = query_memory(client, config, p).await;
             let context = result

@@ -237,6 +237,7 @@ fn build_system_prompt(sdr_hint: Option<&SdrClassification>) -> String {
 Classify the user's message into exactly one intent:
 - coding: Programming, debugging, code review, build errors, architecture
 - reasoning: Explanations, analysis, comparisons, design decisions, planning
+- research: In-depth investigation, literature review, comparing approaches, surveying options, gathering information
 - home_automation: Smart home, lights, sensors, climate, Home Assistant entities
 - gaming: VM management, gaming PCs, Proxmox, GPU passthrough
 - default: General questions, greetings, anything else

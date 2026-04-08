@@ -10,14 +10,16 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-use ygg_domain::config::{BackendType, FlowConfig, FlowInput, FlowStep, FlowTrigger};
+use ygg_domain::config::{AgentLoopConfig, BackendType, FlowConfig, FlowInput, FlowStep, FlowTrigger};
 
 use crate::error::OdinError;
 use crate::openai::{
     ChatCompletionRequest, ChatMessage, OllamaChatRequest, OllamaMessage, OllamaOptions, Role,
 };
 use crate::proxy;
-use crate::state::BackendState;
+use crate::router::RoutingDecision;
+use crate::state::{AppState, BackendState};
+use crate::tool_registry::{self, ToolTier};
 
 /// Result of a completed flow execution.
 #[derive(Debug)]
@@ -96,10 +98,15 @@ impl FlowEngine {
     }
 
     /// Execute a flow pipeline, optionally with convergence looping.
+    ///
+    /// When `state` is `Some`, tool-enabled steps (those with `step.tools`) run
+    /// a mini agent loop via `agent::run_agent_loop()`.  When `None` (tests),
+    /// tool-enabled steps fall back to single-turn chat.
     pub async fn execute(
         &self,
         flow: &FlowConfig,
         user_message: &str,
+        state: Option<&AppState>,
     ) -> Result<FlowResult, OdinError> {
         let start = Instant::now();
         let mut outputs: HashMap<String, String> = HashMap::new();
@@ -122,7 +129,7 @@ impl FlowEngine {
 
         // Run all steps once
         for step in &flow.steps {
-            self.run_step(step, flow, user_message, &mut outputs, &mut step_timings, &mut final_key, &start, &timeout).await?;
+            self.run_step(step, flow, user_message, &mut outputs, &mut step_timings, &mut final_key, &start, &timeout, state).await?;
         }
 
         // If loop is configured, check convergence and repeat
@@ -150,7 +157,7 @@ impl FlowEngine {
 
                 // Re-run steps from restart_from_step onwards
                 for step in &flow.steps[restart..] {
-                    self.run_step(step, flow, user_message, &mut outputs, &mut step_timings, &mut final_key, &start, &timeout).await?;
+                    self.run_step(step, flow, user_message, &mut outputs, &mut step_timings, &mut final_key, &start, &timeout, state).await?;
                 }
             }
         }
@@ -174,6 +181,7 @@ impl FlowEngine {
         final_key: &mut String,
         start: &Instant,
         timeout: &tokio::time::Duration,
+        state: Option<&AppState>,
     ) -> Result<(), OdinError> {
         let step_start = Instant::now();
         let input_text = self.resolve_input(&step.input, user_message, outputs)?;
@@ -186,7 +194,7 @@ impl FlowEngine {
             )));
         }
 
-        let result = tokio::time::timeout(remaining, self.call_step(step, &input_text))
+        let result = tokio::time::timeout(remaining, self.call_step(step, &input_text, state))
             .await
             .map_err(|_| {
                 OdinError::Upstream(format!(
@@ -242,11 +250,141 @@ impl FlowEngine {
                 }
                 Ok(result)
             }
+            FlowInput::Accumulated { keys, separator } => {
+                let mut parts = Vec::new();
+                for key in keys {
+                    if let Some(value) = outputs.get(key) {
+                        parts.push(value.clone());
+                    }
+                }
+                if parts.is_empty() {
+                    return Err(OdinError::BadRequest(
+                        "accumulated input: none of the referenced keys have outputs".to_string(),
+                    ));
+                }
+                Ok(parts.join(separator))
+            }
         }
     }
 
     /// Call a single flow step against its configured backend.
-    async fn call_step(&self, step: &FlowStep, input: &str) -> Result<String, OdinError> {
+    ///
+    /// When the step declares `tools` and `state` is available, this runs a
+    /// mini agent loop (multi-turn tool calling) instead of single-turn chat.
+    async fn call_step(
+        &self,
+        step: &FlowStep,
+        input: &str,
+        state: Option<&AppState>,
+    ) -> Result<String, OdinError> {
+        // ── Agentic path: step has tools and we have AppState ──────
+        if let (Some(tool_names), Some(app)) = (&step.tools, state) {
+            return self.call_step_agentic(step, input, tool_names, app).await;
+        }
+
+        // ── Standard single-turn path ──────────────────────────────
+        self.call_step_single(step, input).await
+    }
+
+    /// Agentic step: runs a mini agent loop with tool calling.
+    async fn call_step_agentic(
+        &self,
+        step: &FlowStep,
+        input: &str,
+        tool_names: &[String],
+        state: &AppState,
+    ) -> Result<String, OdinError> {
+        let backend = self
+            .backends
+            .iter()
+            .find(|b| b.name == step.backend)
+            .ok_or_else(|| {
+                OdinError::BadRequest(format!(
+                    "flow step '{}' references unknown backend '{}'",
+                    step.name, step.backend
+                ))
+            })?;
+
+        // Build tool definitions filtered by the step's tool list.
+        let allowed_tiers = &[ToolTier::Safe, ToolTier::Restricted];
+        let tool_defs = tool_registry::to_tool_definitions_filtered(
+            &state.tool_registry,
+            allowed_tiers,
+            tool_names,
+        );
+
+        if tool_defs.is_empty() {
+            tracing::warn!(
+                step = %step.name,
+                tools = ?tool_names,
+                "agentic step: no matching tools found in registry, falling back to single-turn"
+            );
+            return self.call_step_single(step, input).await;
+        }
+
+        // Build messages for the agent loop.
+        let mut messages = Vec::new();
+        if let Some(sys) = &step.system_prompt {
+            messages.push(ChatMessage::new(Role::System, sys.as_str()));
+        }
+        messages.push(ChatMessage::new(Role::User, input));
+
+        // Construct a synthetic routing decision from the step config.
+        let decision = RoutingDecision {
+            intent: format!("flow_step:{}", step.name),
+            confidence: Some(1.0),
+            router_method: crate::router::RouterMethod::Keyword,
+            model: step.model.clone(),
+            backend_url: backend.url.clone(),
+            backend_type: backend.backend_type.clone(),
+            backend_name: backend.name.clone(),
+        };
+
+        // Use step's agent_config or sensible defaults for flow steps.
+        let default_config = AgentLoopConfig {
+            max_iterations: 5,
+            max_tool_calls_total: 15,
+            tool_timeout_secs: 30,
+            total_timeout_secs: 120,
+            default_tiers: vec!["safe".into(), "restricted".into()],
+            temperature: step.temperature,
+            tool_output_max_chars: 4000,
+            enable_thinking: step.think.unwrap_or(false),
+        };
+        let config = step.agent_config.as_ref().unwrap_or(&default_config);
+
+        let completion_id = format!("flow-agent-{}-{}", step.name, proxy::unix_now());
+        let context_window = backend.context_window;
+
+        tracing::info!(
+            step = %step.name,
+            tools = tool_defs.len(),
+            max_iter = config.max_iterations,
+            "starting agentic flow step"
+        );
+
+        let resp = crate::agent::run_agent_loop(
+            state,
+            &messages,
+            &tool_defs,
+            &state.tool_registry,
+            allowed_tiers,
+            &decision,
+            &completion_id,
+            config,
+            context_window,
+        )
+        .await?;
+
+        Ok(resp
+            .choices
+            .first()
+            .map(|c| c.message.content.clone())
+            .unwrap_or_default())
+    }
+
+    /// Standard single-turn chat step (no tools).
+    async fn call_step_single(&self, step: &FlowStep, input: &str) -> Result<String, OdinError> {
         let backend = self
             .backends
             .iter()
@@ -389,5 +527,42 @@ mod tests {
             .unwrap();
         assert!(result.contains("fn add"));
         assert!(result.contains("write an add function"));
+    }
+
+    #[test]
+    fn test_resolve_accumulated() {
+        let engine = FlowEngine {
+            http_client: reqwest::Client::new(),
+            backends: Arc::new(vec![]),
+        };
+        let mut outputs = HashMap::new();
+        outputs.insert("search_internal".to_string(), "Found 3 results from memory".to_string());
+        outputs.insert("search_external".to_string(), "Found 2 web results".to_string());
+
+        let input = FlowInput::Accumulated {
+            keys: vec!["search_internal".to_string(), "search_external".to_string()],
+            separator: "\n---\n".to_string(),
+        };
+
+        let result = engine.resolve_input(&input, "query", &outputs).unwrap();
+        assert!(result.contains("Found 3 results from memory"));
+        assert!(result.contains("Found 2 web results"));
+        assert!(result.contains("---"));
+    }
+
+    #[test]
+    fn test_resolve_accumulated_empty_keys_errors() {
+        let engine = FlowEngine {
+            http_client: reqwest::Client::new(),
+            backends: Arc::new(vec![]),
+        };
+        let outputs = HashMap::new();
+
+        let input = FlowInput::Accumulated {
+            keys: vec!["nonexistent".to_string()],
+            separator: "\n".to_string(),
+        };
+
+        assert!(engine.resolve_input(&input, "query", &outputs).is_err());
     }
 }

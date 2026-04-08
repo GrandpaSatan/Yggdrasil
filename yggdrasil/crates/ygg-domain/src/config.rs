@@ -732,11 +732,18 @@ pub struct FlowStep {
     #[serde(default = "default_flow_step_temperature")]
     pub temperature: f64,
     /// Optional list of tool names this step can use.
+    /// When present, this step runs a mini agent loop (tool-calling cycle)
+    /// instead of a single-turn chat completion.
     #[serde(default)]
     pub tools: Option<Vec<String>>,
     /// Override thinking mode (Some(false) to disable for Gemma 4 / Qwen 3.5).
     #[serde(default)]
     pub think: Option<bool>,
+    /// Agent loop configuration for tool-enabled steps.
+    /// When `tools` is `Some`, controls iteration limits, timeouts, and tiers.
+    /// Falls back to sensible defaults when omitted.
+    #[serde(default)]
+    pub agent_config: Option<AgentLoopConfig>,
 }
 
 /// Input source for a flow step.
@@ -753,6 +760,8 @@ pub enum FlowInput {
     StepOutput { key: String },
     /// Format string with placeholders: {user_message}, {step_name.output}.
     Template { template: String },
+    /// Concatenate outputs from multiple prior steps.
+    Accumulated { keys: Vec<String>, separator: String },
 }
 
 fn default_flow_timeout() -> u64 { 120 }

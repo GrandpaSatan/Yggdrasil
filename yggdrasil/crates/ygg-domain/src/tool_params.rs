@@ -49,6 +49,9 @@ pub struct QueryMemoryParams {
     /// Maximum number of engrams to return (default 5, max 20).
     #[serde(default = "default_query_limit")]
     pub limit: Option<u32>,
+    /// Optional tag filter — only return engrams matching ALL specified tags.
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
 }
 
 /// Parameters for the `store_memory` tool.
@@ -518,6 +521,53 @@ pub struct WebSearchParams {
     pub count: Option<u32>,
 }
 
+fn default_doc_search_limit() -> Option<u32> { Some(10) }
+
+/// Parameters for the `search_documents` tool.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SearchDocumentsParams {
+    /// Search query (semantic + keyword).
+    pub query: String,
+    /// Filter by document type: "pdf", "markdown", "text", "transcript".
+    #[serde(default)]
+    pub doc_types: Option<Vec<String>>,
+    /// Filter by project name.
+    #[serde(default)]
+    pub project: Option<String>,
+    /// Maximum number of chunks to return (default 10, max 50).
+    #[serde(default = "default_doc_search_limit")]
+    pub limit: Option<u32>,
+}
+
+/// Parameters for the `ingest_document` tool.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct IngestDocumentParams {
+    /// Source URI or file path identifying the document.
+    pub source_uri: String,
+    /// Full text content of the document.
+    pub content: String,
+    /// Document type: "markdown", "text", "pdf_text", "transcript".
+    pub doc_type: String,
+    /// Optional document title.
+    #[serde(default)]
+    pub title: Option<String>,
+    /// Optional project scope.
+    #[serde(default)]
+    pub project: Option<String>,
+}
+
+/// Parameters for the `research_report` tool.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ResearchReportParams {
+    /// The original research query.
+    pub query: String,
+    /// Synthesized findings to store.
+    pub findings: String,
+    /// Tags for the research engram (auto-includes "research").
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
+}
+
 // ── Schema generation ───────────────────────────────────────────────
 
 /// Generate the JSON Schema for a tool's parameter type by name.
@@ -557,6 +607,9 @@ pub fn schema_for_tool(name: &str) -> Option<serde_json::Value> {
         "deploy" => schemars::schema_for!(DeployParams),
         "network_topology" => schemars::schema_for!(NetworkTopologyParams),
         "web_search" => schemars::schema_for!(WebSearchParams),
+        "search_documents" => schemars::schema_for!(SearchDocumentsParams),
+        "ingest_document" => schemars::schema_for!(IngestDocumentParams),
+        "research_report" => schemars::schema_for!(ResearchReportParams),
         "list_models" => return Some(serde_json::json!({"type": "object", "properties": {}})),
         _ => return None,
     };
