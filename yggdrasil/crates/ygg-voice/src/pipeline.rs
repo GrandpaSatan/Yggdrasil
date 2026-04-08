@@ -142,8 +142,9 @@ impl VoicePipeline {
                                 calibration_energy_count += 1;
                                 if calibration_samples >= calibration_needed {
                                     let noise_floor = (calibration_energy_sum / calibration_energy_count as f64) as f32;
-                                    dyn_vad_threshold = (noise_floor * 3.0_f32).max(VAD_ENERGY_THRESHOLD);
-                                    dyn_silence_threshold = (noise_floor * 1.5_f32).max(VAD_SILENCE_THRESHOLD);
+                                    // Cap thresholds so speech triggers even in noisy rooms (fans/PCs).
+                                    dyn_vad_threshold = (noise_floor * 3.0_f32).max(VAD_ENERGY_THRESHOLD).min(0.15);
+                                    dyn_silence_threshold = (noise_floor * 1.5_f32).max(VAD_SILENCE_THRESHOLD).min(0.10);
                                     calibrated = true;
                                     info!(
                                         noise_floor = %format!("{noise_floor:.6}"),

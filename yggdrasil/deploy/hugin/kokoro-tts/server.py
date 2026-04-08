@@ -1,141 +1,231 @@
 #!/usr/bin/env python3
-"""Yggdrasil Voice Server — RNNoise + Whisper STT + Kokoro TTS.
+"""Yggdrasil Voice Server — Qwen2.5-Omni-7B for native speech-to-speech.
 
 Endpoints:
-  POST /api/v1/tts  — { text, voice? } → raw PCM i16 bytes + x-sample-rate header
-  POST /api/v1/stt  — WAV audio bytes → { text } (RNNoise denoise + Whisper transcription)
-  GET  /health      — health check
+  POST /api/v1/stt   — WAV bytes → { text }
+  POST /api/v1/tts   — { text } → PCM i16 bytes + x-sample-rate header
+  POST /api/v1/chat  — { audio_b64?, text?, system_prompt? } → { text, audio_b64? }
+  GET  /health
 """
 
+import base64
 import io
 import logging
+import os
 import sys
 import time
-import wave
 
 import numpy as np
+import soundfile as sf
+import torch
 from flask import Flask, Response, jsonify, request
+
+os.environ.setdefault("TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL", "1")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", stream=sys.stdout)
 log = logging.getLogger("voice-server")
 
 app = Flask(__name__)
-kokoro = None
-whisper_model = None
-denoiser = None
+
+model = None
+processor = None
+
+MODEL_PATH = "/opt/yggdrasil/models/qwen25-omni-7b"
+SPEAKER = "Ethan"
+SAMPLE_RATE = 24000
+
+# MUST use this exact system prompt for audio output to work
+DEFAULT_SYSTEM_PROMPT = (
+    "You are Qwen, a virtual human developed by the Qwen Team, Alibaba Group, "
+    "capable of perceiving auditory and visual inputs, as well as generating text and speech."
+)
 
 
-def load_models():
-    global kokoro, whisper_model, denoiser
+def load_model():
+    global model, processor
+    from transformers import Qwen2_5OmniForConditionalGeneration, Qwen2_5OmniProcessor
 
-    from kokoro_onnx import Kokoro
-    log.info("Loading Kokoro TTS...")
-    kokoro = Kokoro("kokoro-v1.0.onnx", "voices-v1.0.bin")
-    log.info("Kokoro TTS ready")
+    log.info(f"Loading processor from {MODEL_PATH}...")
+    processor = Qwen2_5OmniProcessor.from_pretrained(MODEL_PATH)
 
-    from faster_whisper import WhisperModel
-    log.info("Loading Whisper STT (small)...")
-    whisper_model = WhisperModel("small", device="cpu", compute_type="int8")
-    log.info("Whisper STT ready")
+    log.info(f"Loading model (fp16) onto GPU...")
+    model = Qwen2_5OmniForConditionalGeneration.from_pretrained(
+        MODEL_PATH,
+        torch_dtype=torch.float16,
+        device_map="auto",
+    )
 
-    from pyrnnoise import RNNoise
-    denoiser = RNNoise(sample_rate=48000)
-    log.info("RNNoise denoiser ready")
+    # Move audio/visual towers to CPU to save VRAM for the main LM
+    if hasattr(model, 'thinker') and hasattr(model.thinker, 'audio_tower'):
+        model.thinker.audio_tower = model.thinker.audio_tower.to("cpu")
+        log.info("Moved audio_tower to CPU")
+    if hasattr(model, 'thinker') and hasattr(model.thinker, 'visual'):
+        model.thinker.visual = model.thinker.visual.to("cpu")
+        log.info("Moved visual tower to CPU")
+
+    log.info("Model loaded.")
 
 
-def denoise_audio(wav_bytes: bytes) -> bytes:
-    """Apply RNNoise to WAV audio. Returns denoised WAV bytes."""
-    # Write input to temp file — pyrnnoise.denoise_wav works with file paths
-    import tempfile, os, soundfile as sf
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_in:
-        tmp_in.write(wav_bytes)
-        in_path = tmp_in.name
-    out_path = in_path.replace(".wav", "_clean.wav")
+def build_inputs(conversation):
+    from qwen_omni_utils import process_mm_info
+    audios, images, videos = process_mm_info(conversation, use_audio_in_video=True)
+    text = processor.apply_chat_template(conversation, add_generation_prompt=True, tokenize=False)
+    inputs = processor(
+        text=text, audio=audios, images=images, videos=videos,
+        return_tensors="pt", padding=True, use_audio_in_video=True,
+    )
+    inputs = inputs.to(model.device).to(model.dtype)
+    return inputs
+
+
+# ─── Endpoints ──────────────────────────────────────────────────
+
+@app.route("/api/v1/stt", methods=["POST"])
+def stt_endpoint():
+    audio_data = request.get_data()
+    if not audio_data:
+        return jsonify({"error": "WAV bytes required"}), 400
+
+    import tempfile
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+        f.write(audio_data)
+        audio_path = f.name
 
     try:
-        # denoise_wav is a generator — must consume it
-        for _ in denoiser.denoise_wav(in_path, out_path):
-            pass
-        with open(out_path, "rb") as f:
-            return f.read()
+        conversation = [
+            {"role": "system", "content": [{"type": "text", "text": DEFAULT_SYSTEM_PROMPT}]},
+            {"role": "user", "content": [
+                {"type": "audio", "audio": audio_path},
+                {"type": "text", "text": "Transcribe this audio."},
+            ]},
+        ]
+        inputs = build_inputs(conversation)
+
+        t0 = time.monotonic()
+        with torch.no_grad():
+            text_ids = model.generate(**inputs, use_audio_in_video=True, return_audio=False, max_new_tokens=256)
+        text = processor.batch_decode(text_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
+        elapsed = time.monotonic() - t0
+
+        log.info(f"STT: '{text}' ({elapsed:.2f}s)")
+        return jsonify({"text": text})
+    except Exception as e:
+        log.error(f"STT failed: {e}")
+        return jsonify({"error": str(e)}), 500
     finally:
-        os.unlink(in_path)
-        if os.path.exists(out_path):
-            os.unlink(out_path)
+        os.unlink(audio_path)
 
 
 @app.route("/api/v1/tts", methods=["POST"])
 def tts_endpoint():
     data = request.json
     if not data or "text" not in data:
-        return jsonify({"error": "JSON body with 'text' required"}), 400
+        return jsonify({"error": "JSON with 'text' required"}), 400
 
-    text = data["text"]
-    voice = data.get("voice", "bm_george")
-
-    t0 = time.monotonic()
     try:
-        audio, sr = kokoro.create(text, voice=voice, speed=1.0)
+        conversation = [
+            {"role": "system", "content": [{"type": "text", "text": DEFAULT_SYSTEM_PROMPT}]},
+            {"role": "user", "content": [{"type": "text", "text": data["text"]}]},
+        ]
+        inputs = build_inputs(conversation)
+
+        t0 = time.monotonic()
+        with torch.no_grad():
+            text_ids, audio_out = model.generate(**inputs, return_audio=True, speaker=SPEAKER, max_new_tokens=512)
+        elapsed = time.monotonic() - t0
+
+        if audio_out is None:
+            return jsonify({"error": "No audio generated"}), 500
+
+        wav = audio_out.reshape(-1).detach().cpu().float().numpy()
+        pcm = (np.clip(wav, -1.0, 1.0) * 32767).astype(np.int16).tobytes()
+
+        log.info(f"TTS: {len(data['text'])} chars → {len(pcm)} bytes ({elapsed:.2f}s)")
+        return Response(pcm, mimetype="application/octet-stream", headers={"x-sample-rate": str(SAMPLE_RATE)})
     except Exception as e:
         log.error(f"TTS failed: {e}")
         return jsonify({"error": str(e)}), 500
 
-    elapsed = time.monotonic() - t0
-    pcm = (np.clip(audio, -1.0, 1.0) * 32767).astype(np.int16)
-    pcm_bytes = pcm.tobytes()
 
-    log.info(f"TTS: {len(text)} chars -> {len(pcm_bytes)} bytes ({elapsed:.2f}s) voice={voice}")
+@app.route("/api/v1/chat", methods=["POST"])
+def chat_endpoint():
+    data = request.json
+    if not data:
+        return jsonify({"error": "JSON body required"}), 400
 
-    return Response(
-        pcm_bytes,
-        mimetype="application/octet-stream",
-        headers={"x-sample-rate": str(sr)},
-    )
+    # Always use default system prompt for audio output compatibility
+    # Inject persona via the user message instead
+    persona_prefix = data.get("persona", "")
 
-
-@app.route("/api/v1/stt", methods=["POST"])
-def stt_endpoint():
-    """Denoise with RNNoise then transcribe with Whisper."""
-    audio_data = request.get_data()
-    if not audio_data:
-        return jsonify({"error": "raw WAV bytes required in body"}), 400
-
-    t0 = time.monotonic()
     try:
-        # Skip RNNoise for now — Whisper's VAD handles noise well on its own.
-        # RNNoise was stripping speech along with noise at this mic's characteristics.
-        denoise_ms = 0
+        audio_b64 = data.get("audio_b64")
+        text_input = data.get("text")
 
-        # Whisper transcription with built-in VAD noise filtering
-        t1 = time.monotonic()
-        segments, info = whisper_model.transcribe(
-            io.BytesIO(audio_data),
-            language="en",
-            initial_prompt="Hey Fergus, can you help me?",
-            vad_filter=True,
-            vad_parameters=dict(
-                min_silence_duration_ms=300,
-                speech_pad_ms=200,
-                threshold=0.5,
-            ),
-            no_speech_threshold=0.6,
-            condition_on_previous_text=False,
-        )
-        text = " ".join(seg.text.strip() for seg in segments).strip()
-        whisper_ms = (time.monotonic() - t1) * 1000
+        if audio_b64:
+            import tempfile
+            audio_bytes = base64.b64decode(audio_b64)
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+                f.write(audio_bytes)
+                audio_path = f.name
+
+            try:
+                user_content = [{"type": "audio", "audio": audio_path}]
+                if persona_prefix:
+                    user_content.append({"type": "text", "text": persona_prefix})
+                conversation = [
+                    {"role": "system", "content": [{"type": "text", "text": DEFAULT_SYSTEM_PROMPT}]},
+                    {"role": "user", "content": user_content},
+                ]
+                inputs = build_inputs(conversation)
+
+                t0 = time.monotonic()
+                with torch.no_grad():
+                    text_ids, audio_out = model.generate(
+                        **inputs, use_audio_in_video=True,
+                        return_audio=True, speaker=SPEAKER,
+                        max_new_tokens=512,
+                    )
+                elapsed = time.monotonic() - t0
+            finally:
+                os.unlink(audio_path)
+
+        elif text_input:
+            msg = f"{persona_prefix} {text_input}".strip() if persona_prefix else text_input
+            conversation = [
+                {"role": "system", "content": [{"type": "text", "text": DEFAULT_SYSTEM_PROMPT}]},
+                {"role": "user", "content": [{"type": "text", "text": msg}]},
+            ]
+            inputs = build_inputs(conversation)
+
+            t0 = time.monotonic()
+            with torch.no_grad():
+                text_ids, audio_out = model.generate(
+                    **inputs, return_audio=True, speaker=SPEAKER,
+                    max_new_tokens=512,
+                )
+            elapsed = time.monotonic() - t0
+        else:
+            return jsonify({"error": "audio_b64 or text required"}), 400
+
+        text_response = processor.batch_decode(text_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
+
+        response = {"text": text_response}
+        if audio_out is not None:
+            wav = audio_out.reshape(-1).detach().cpu().float().numpy()
+            buf = io.BytesIO()
+            sf.write(buf, wav, SAMPLE_RATE, format="WAV")
+            response["audio_b64"] = base64.b64encode(buf.getvalue()).decode("ascii")
+
+        log.info(f"Chat: '{text_response[:80]}' ({elapsed:.2f}s, audio={'yes' if audio_out is not None else 'no'})")
+        return jsonify(response)
     except Exception as e:
-        log.error(f"STT failed: {e}")
+        log.error(f"Chat failed: {e}")
         return jsonify({"error": str(e)}), 500
-
-    total_ms = (time.monotonic() - t0) * 1000
-    log.info(f"STT: '{text}' (denoise={denoise_ms:.0f}ms whisper={whisper_ms:.0f}ms total={total_ms:.0f}ms)")
-
-    return jsonify({"text": text})
 
 
 @app.route("/health", methods=["GET"])
 def health():
-    return jsonify({"status": "ok", "service": "voice-server", "models": ["rnnoise", "whisper-base", "kokoro-v1.0"]})
+    return jsonify({"status": "ok", "service": "voice-server", "model": "Qwen2.5-Omni-7B", "speaker": SPEAKER})
 
 
 if __name__ == "__main__":
@@ -145,6 +235,6 @@ if __name__ == "__main__":
     parser.add_argument("--host", default="0.0.0.0")
     args = parser.parse_args()
 
-    load_models()
-    log.info(f"Starting voice server on {args.host}:{args.port}")
+    load_model()
+    log.info(f"Starting Qwen2.5-Omni voice server on {args.host}:{args.port}")
     app.run(host=args.host, port=args.port, threaded=False)

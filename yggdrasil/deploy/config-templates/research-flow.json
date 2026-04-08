@@ -2,7 +2,7 @@
   "_comment": "Sprint 056 — Research flow config template. Merge into odin config.json under 'flows' array.",
   "_models": {
     "agentic": "gemma4:e4b — native Ollama tool calling, 9.6GB",
-    "non_agentic": "mollysama/rwkv-7-g1d:2.9b — fast (51 tok/s), 1M context, 2.6GB. Requires think:false."
+    "non_agentic": "mollysama/rwkv-7-g1e:2.9b — fast (51 tok/s), 1M context, 2.6GB. Requires think:false."
   },
   "flows": [
     {
@@ -14,7 +14,7 @@
         {
           "name": "decompose",
           "backend": "hugin-ollama",
-          "model": "mollysama/rwkv-7-g1d:2.9b",
+          "model": "mollysama/rwkv-7-g1e:2.9b",
           "system_prompt": "You are a research decomposition specialist. Break the user's research question into 2-5 independent, searchable sub-questions. Output a numbered list. Each sub-question should be self-contained and specific enough to search for directly.",
           "input": "user_message",
           "output_key": "decompose",
@@ -25,7 +25,7 @@
         {
           "name": "plan",
           "backend": "hugin-ollama",
-          "model": "mollysama/rwkv-7-g1d:2.9b",
+          "model": "mollysama/rwkv-7-g1e:2.9b",
           "system_prompt": "You are a research planner. Given sub-questions, decide which search sources to use for each: \"memory\" (past knowledge/engrams), \"code\" (codebase search), \"documents\" (ingested docs), or \"web\" (internet search). Output a JSON array: [{\"question\": \"...\", \"sources\": [\"memory\", \"web\"]}]",
           "input": { "template": { "template": "Original query: {user_message}\n\nSub-questions:\n{decompose.output}\n\nCreate a search plan for each sub-question." } },
           "output_key": "plan",
@@ -78,7 +78,7 @@
         {
           "name": "filter",
           "backend": "hugin-ollama",
-          "model": "mollysama/rwkv-7-g1d:2.9b",
+          "model": "mollysama/rwkv-7-g1e:2.9b",
           "system_prompt": "You are a research editor. Evaluate the relevance and reliability of each finding. Remove duplicates, flag contradictions, and rank by relevance to the original question. Output only the filtered, high-quality findings organized by topic.",
           "input": { "accumulated": { "keys": ["search_internal", "search_external"], "separator": "\n\n--- External search results ---\n\n" } },
           "output_key": "filter",
@@ -110,7 +110,7 @@
         {
           "name": "synthesize",
           "backend": "hugin-ollama",
-          "model": "mollysama/rwkv-7-g1d:2.9b",
+          "model": "mollysama/rwkv-7-g1e:2.9b",
           "system_prompt": "You are a research synthesizer. Combine the filtered research findings into a comprehensive, well-structured answer to the original question. Use clear sections with headers. Cite sources where available. If findings conflict, note the disagreement.",
           "input": { "template": { "template": "Original question: {user_message}\n\nFiltered research findings:\n{filter.output}\n\nSynthesize a comprehensive answer." } },
           "output_key": "synthesize",

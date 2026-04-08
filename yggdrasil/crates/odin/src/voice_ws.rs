@@ -737,18 +737,18 @@ async fn process_utterance(
             }
         }
     } else if let Some(ref voice_url) = state.voice_api_url {
-        // Sprint 057: Whisper STT → Gemma 4 reasoning → Kokoro TTS pipeline.
-        // Step 1: Send audio to Whisper STT (handles noisy environments).
-        tracing::info!("voice: no omni_url — using Whisper STT + perceive flow");
+        // Sprint 057: LFM2.5-Audio STT → LFM2.5-Audio/Gemma 4 reasoning → LFM2.5-Audio TTS.
+        tracing::info!("voice: no omni_url — using LFM2.5-Audio split pipeline");
 
         let pcm_bytes: Vec<u8> = audio_buffer.iter().flat_map(|s| s.to_le_bytes()).collect();
         let wav_bytes = pcm_to_wav(&pcm_bytes, SAMPLE_RATE);
 
+        // ── Step 1: LFM2.5-Audio STT ──────────────────────────────
         let stt_url = format!("{voice_url}/api/v1/stt");
         let stt_result = http
             .post(&stt_url)
             .body(wav_bytes)
-            .timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(15))
             .send()
             .await;
 
@@ -758,11 +758,11 @@ async fn process_utterance(
                 body["text"].as_str().unwrap_or("").to_string()
             }
             Ok(resp) => {
-                tracing::warn!(status = %resp.status(), "Whisper STT failed");
+                tracing::warn!(status = %resp.status(), "LFM-Audio STT failed");
                 return ProcessResult::NotAddressed;
             }
             Err(e) => {
-                tracing::warn!(error = %e, "Whisper STT request failed");
+                tracing::warn!(error = %e, "LFM-Audio STT request failed");
                 return ProcessResult::NotAddressed;
             }
         };
@@ -772,7 +772,7 @@ async fn process_utterance(
             return ProcessResult::NotAddressed;
         }
 
-        tracing::info!(transcript = %transcript, "Whisper STT result");
+        tracing::info!(transcript = %transcript, "LFM-Audio STT result");
 
         let _ = socket
             .send(Message::Text(
@@ -781,37 +781,66 @@ async fn process_utterance(
             ))
             .await;
 
-        // Step 2: Send transcript to Gemma 4 for reasoning (text-only, no audio).
-        let system = "You are Fergus, a helpful AI assistant on the Yggdrasil home server. \
-                      Be direct and concise. 1-2 sentences. No markdown.";
-        let ollama_url = "http://10.0.65.9:11434";
-        let chat_body = serde_json::json!({
-            "model": "gemma4:e4b",
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": transcript}
-            ],
-            "stream": false,
-            "options": {"num_ctx": 4096, "temperature": 0.7},
-            "think": false
-        });
+        // ── Step 2: Reasoning — LFM2.5-Audio for simple, Gemma 4 for complex ──
+        // Check if the transcript contains tool-triggering keywords.
+        let needs_escalation = transcript.contains("turn on") || transcript.contains("turn off")
+            || transcript.contains("light") || transcript.contains("switch")
+            || transcript.contains("gaming") || transcript.contains("Thor")
+            || transcript.contains("launch") || transcript.contains("status")
+            || transcript.contains("memory") || transcript.contains("search");
 
-        let llm_result = http
-            .post(format!("{ollama_url}/api/chat"))
-            .json(&chat_body)
-            .timeout(std::time::Duration::from_secs(15))
-            .send()
-            .await;
+        let response_text = if needs_escalation {
+            // Escalate to Gemma 4 E4B for tool-capable reasoning.
+            tracing::info!("voice: escalating to Gemma 4 for complex request");
+            let ollama_url = "http://10.0.65.9:11434";
+            let chat_body = serde_json::json!({
+                "model": "gemma4:e4b",
+                "messages": [
+                    {"role": "system", "content": "You are Fergus, a helpful AI butler on the Yggdrasil home server. Be direct and concise. 1-2 sentences. No markdown."},
+                    {"role": "user", "content": transcript}
+                ],
+                "stream": false,
+                "options": {"num_ctx": 4096, "temperature": 0.7},
+                "think": false
+            });
 
-        let response_text = match llm_result {
-            Ok(resp) if resp.status().is_success() => {
-                let body: serde_json::Value = resp.json().await.unwrap_or_default();
-                body["message"]["content"].as_str().unwrap_or("I didn't catch that, sir.").to_string()
+            match http
+                .post(format!("{ollama_url}/api/chat"))
+                .json(&chat_body)
+                .timeout(std::time::Duration::from_secs(15))
+                .send()
+                .await
+            {
+                Ok(resp) if resp.status().is_success() => {
+                    let body: serde_json::Value = resp.json().await.unwrap_or_default();
+                    body["message"]["content"].as_str().unwrap_or("I didn't catch that, sir.").to_string()
+                }
+                _ => "I'm having trouble thinking right now, sir.".to_string(),
             }
-            _ => "I'm having trouble thinking right now, sir.".to_string(),
+        } else {
+            // Simple conversation — let LFM2.5-Audio handle reasoning via text chat.
+            let chat_url = format!("{voice_url}/api/v1/chat");
+            let chat_body = serde_json::json!({
+                "text": transcript,
+                "system_prompt": "You are Fergus, a helpful AI butler. Be direct and concise. 1-2 sentences."
+            });
+
+            match http
+                .post(&chat_url)
+                .json(&chat_body)
+                .timeout(std::time::Duration::from_secs(15))
+                .send()
+                .await
+            {
+                Ok(resp) if resp.status().is_success() => {
+                    let body: serde_json::Value = resp.json().await.unwrap_or_default();
+                    body["text"].as_str().unwrap_or("I didn't catch that, sir.").to_string()
+                }
+                _ => "I'm having trouble right now, sir.".to_string(),
+            }
         };
 
-        tracing::info!(response = %response_text, "Gemma 4 voice response");
+        tracing::info!(response = %response_text, escalated = needs_escalation, "voice response");
         (format!("{response_text}\n[DONE]"), None)
     } else {
         tracing::warn!("voice: no omni_url and no voice_api_url configured");

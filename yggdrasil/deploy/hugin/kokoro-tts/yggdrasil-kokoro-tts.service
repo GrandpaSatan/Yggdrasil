@@ -1,5 +1,5 @@
 [Unit]
-Description=Yggdrasil Kokoro TTS Server
+Description=Yggdrasil Voice Server — LFM2.5-Audio STT+TTS (ROCm eGPU)
 After=network.target
 
 [Service]
@@ -8,9 +8,11 @@ User=jhernandez
 WorkingDirectory=/opt/yggdrasil/deploy/kokoro-tts
 ExecStart=/opt/yggdrasil/deploy/kokoro-tts/.venv/bin/python3 server.py --port 9098
 Restart=on-failure
-RestartSec=10
-TimeoutStartSec=60
+RestartSec=30
+TimeoutStartSec=600
 Environment=PYTHONUNBUFFERED=1
+Environment=ROCR_VISIBLE_DEVICES=0
+Environment=TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1
 
 [Install]
 WantedBy=multi-user.target
