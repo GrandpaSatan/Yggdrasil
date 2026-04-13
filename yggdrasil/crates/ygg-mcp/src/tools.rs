@@ -4549,27 +4549,93 @@ pub async fn deploy(
                 _ => vec!["munin", "hugin"],
             };
 
+            // Resolution order matches the CLAUDE.md "deploy via /tmp then sudo cp"
+            // pattern: rsync to a user-writable staging dir, then ssh+sudo cp into
+            // /opt/yggdrasil/bin/. The systemd .path watcher on Munin auto-restarts
+            // the service when the final binary is replaced.
+            let deploy_user = config
+                .deploy_user
+                .clone()
+                .or_else(|| std::env::var("DEPLOY_USER").ok())
+                .unwrap_or_else(|| "yggdrasil".into());
+            let sudo_password = std::env::var("YGG_SUDO_PASSWORD")
+                .ok()
+                .or_else(|| config.deploy_sudo_password.clone());
+
             let bin_path = format!("{}/target/release/{}", workspace, params.service);
+            let staging = format!("/tmp/{}.new", params.service);
+            let final_path = format!("/opt/yggdrasil/bin/{}", params.service);
             let mut results = Vec::new();
 
             for node in &nodes {
-                let deploy_user = std::env::var("DEPLOY_USER").unwrap_or_else(|_| "yggdrasil".into());
-                let dest = format!("{}@{}:/opt/yggdrasil/bin/{}", deploy_user, node, params.service);
-                let output = tokio::process::Command::new("rsync")
-                    .args(["-az", "--progress", &bin_path, &dest])
+                // 1. rsync binary to /tmp/<svc>.new on the node.
+                let rsync_dest = format!("{}@{}:{}", deploy_user, node, staging);
+                let rsync_out = tokio::process::Command::new("rsync")
+                    .args(["-az", &bin_path, &rsync_dest])
                     .output()
                     .await;
 
-                match output {
-                    Ok(o) if o.status.success() => {
-                        results.push(format!("{node}: deployed successfully"));
-                    }
+                match rsync_out {
+                    Ok(o) if o.status.success() => {}
                     Ok(o) => {
                         let stderr = String::from_utf8_lossy(&o.stderr);
-                        results.push(format!("{node}: rsync failed — {stderr}"));
+                        results.push(format!("{node}: rsync to {staging} failed — {stderr}"));
+                        continue;
                     }
                     Err(e) => {
                         results.push(format!("{node}: rsync error — {e}"));
+                        continue;
+                    }
+                }
+
+                // 2. ssh+sudo cp from /tmp/<svc>.new to /opt/yggdrasil/bin/<svc>.
+                //    Chown and chmod so the service binary has the expected perms.
+                //    Path watcher auto-restarts the unit on content change.
+                let sudo_prefix = match &sudo_password {
+                    Some(pw) => format!("echo '{}' | sudo -S -p '' ", pw.replace('\'', "'\\''")),
+                    None => "sudo -n ".to_string(),
+                };
+                // Atomic replace: stage inside /opt so the final mv is a same-filesystem
+                // rename syscall (required — /tmp and /opt can be on different mounts, and
+                // Linux refuses to `cp` over a running executable with "Text file busy" but
+                // WILL allow `mv` because rename swaps inodes). Explicit systemctl restart
+                // picks up the new binary — Odin's systemd unit has no .path watcher so
+                // we can't rely on implicit reload.
+                let final_new = format!("{final_path}.new");
+                let unit = format!("yggdrasil-{}.service", params.service);
+                let remote_cmd = format!(
+                    "{sudo_prefix}bash -c 'cp {staging} {final_new} && \
+                         chown yggdrasil:yggdrasil {final_new} && \
+                         chmod 755 {final_new} && \
+                         mv -f {final_new} {final_path} && \
+                         rm -f {staging} && \
+                         (systemctl is-enabled {unit} >/dev/null 2>&1 && systemctl restart {unit} || true)'"
+                );
+                let ssh_dest = format!("{}@{}", deploy_user, node);
+                let ssh_out = tokio::process::Command::new("ssh")
+                    .args([&ssh_dest, &remote_cmd])
+                    .output()
+                    .await;
+
+                match ssh_out {
+                    Ok(o) if o.status.success() => {
+                        results.push(format!(
+                            "{node}: deployed to {final_path} (staged via {staging})"
+                        ));
+                    }
+                    Ok(o) => {
+                        let stderr = String::from_utf8_lossy(&o.stderr);
+                        if stderr.contains("password") || stderr.contains("sudo: a password is required") {
+                            results.push(format!(
+                                "{node}: sudo password required. Set YGG_SUDO_PASSWORD env var or \
+                                 deploy_sudo_password in local-mcp.yaml, or configure NOPASSWD sudoers."
+                            ));
+                        } else {
+                            results.push(format!("{node}: sudo cp failed — {stderr}"));
+                        }
+                    }
+                    Err(e) => {
+                        results.push(format!("{node}: ssh error — {e}"));
                     }
                 }
             }

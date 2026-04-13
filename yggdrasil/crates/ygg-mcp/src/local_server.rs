@@ -18,7 +18,9 @@ use std::time::{Duration, Instant};
 use uuid::Uuid;
 use ygg_domain::config::McpServerConfig;
 
-use crate::tools::{ScreenshotParams, SyncDocsParams, screenshot, sync_docs};
+use crate::tools::{
+    DeployParams, ScreenshotParams, SyncDocsParams, deploy, screenshot, sync_docs,
+};
 
 // ---------------------------------------------------------------------------
 // Browser lifecycle helpers
@@ -175,6 +177,43 @@ impl YggdrasilLocalServer {
         let is_error = text.starts_with("Error:");
         self.emit_event("tool", serde_json::json!({
             "name": "screenshot",
+            "status": if is_error { "error" } else { "ok" },
+            "duration_ms": start.elapsed().as_millis() as u64,
+        }));
+        text
+    }
+
+    /// Build and deploy Yggdrasil service binaries.
+    ///
+    /// Runs on the local stdio server because `cargo build` needs the
+    /// workstation toolchain (Munin has no cargo — remote MCP can't build).
+    /// The `deploy` action rsyncs the built binary to Munin and/or Hugin.
+    #[tool(description = "Build and deploy Yggdrasil service binaries. \
+        Actions: 'build' (compile the specified service with cargo build --release, \
+        runs on the local workstation toolchain), \
+        'deploy' (rsync binary to target node — path watchers auto-restart the service), \
+        'status' (check if the release binary exists locally). \
+        Requires 'service' (e.g. 'odin', 'mimir'). \
+        Optional 'node' (e.g. 'munin', 'hugin' — omit to deploy to both).")]
+    async fn deploy_tool(
+        &self,
+        Parameters(params): Parameters<DeployParams>,
+    ) -> String {
+        let start = Instant::now();
+        let action = params.action.clone();
+        let service = params.service.clone();
+        let result = deploy(&self.client, &self.config, params).await;
+        let text = result
+            .content
+            .into_iter()
+            .next()
+            .and_then(|c| c.raw.as_text().map(|t| t.text.clone()))
+            .unwrap_or_default();
+        let is_error = text.starts_with("Error") || text.contains("failed");
+        self.emit_event("tool", serde_json::json!({
+            "name": "deploy",
+            "action": action,
+            "service": service,
             "status": if is_error { "error" } else { "ok" },
             "duration_ms": start.elapsed().as_millis() as u64,
         }));

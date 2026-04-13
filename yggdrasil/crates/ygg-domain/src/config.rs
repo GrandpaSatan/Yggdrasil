@@ -881,6 +881,15 @@ pub struct McpServerConfig {
     /// Example: "/tmp/ygg-hooks/memory-events.jsonl"
     #[serde(default)]
     pub events_file: Option<String>,
+    /// SSH user for deploy_tool rsync target. Defaults to $DEPLOY_USER env or "yggdrasil".
+    /// Example: "jhernandez" — the account with key-based SSH into target nodes.
+    #[serde(default)]
+    pub deploy_user: Option<String>,
+    /// Sudo password for deploy_tool's `cp /tmp/<svc>.new /opt/yggdrasil/bin/<svc>` step.
+    /// Overridden by the $YGG_SUDO_PASSWORD env var if set. Omit to rely on NOPASSWD sudoers.
+    /// WARNING: storing plaintext in a yaml file — use chmod 600 on the config.
+    #[serde(default)]
+    pub deploy_sudo_password: Option<String>,
 }
 
 fn default_migrations_path() -> Option<String> {

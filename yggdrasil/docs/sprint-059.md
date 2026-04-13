@@ -165,3 +165,48 @@ Smoke test surfaced **two real bugs**:
 - **Fusion V6 untested at API level** — model loaded but no Fusion 360 prompt has been run through it via Odin yet. Smoke test in Phase E.
 
 ## (Original carry list — all now resolved in Phases E/F/G above)
+
+## Phase H — Sprint 060 execution (live deploy + tooling)
+
+Close-out shipped 2026-04-13:
+
+- ✅ **Odin binary deployed to Munin with flow CRUD endpoints.** Rebuilt via the refactored `mcp__yggdrasil-local__deploy_tool` (see Phase I below). Live round-trip verified: `GET /api/flows/coding_swarm` → `PUT` with mutated `system_prompt` → `{"ok":true}` → `GET` reflects mutation → revert restores original. `/api/backends` returns 4 backends. Permissions fix on `/etc/yggdrasil/odin/` (group `yggdrasil` + `g+w`) so the service can write its own config.
+- ✅ **Fusion V6 Modelfile rewritten** with an instruction-style chat TEMPLATE (`{{ .System }}` + `### Instruction:` + `### Code:`). `ollama create fusion-v6` on Munin. Smoke via Odin `/v1/chat/completions`: **359 tokens of valid Fusion 360 Python** with `adsk.core` / `adsk.fusion` imports, `run(context)` entrypoint, sketch-then-extrude pattern. Was 7 tokens before the fix.
+- ✅ **SDR prototype seeder run + deployed.** Mimir-encoded 6 intents × 10 phrases, pushed to `/var/lib/yggdrasil/odin-sdr-prototypes.json` (1455 bytes), Odin restarted cleanly. Log shows `loaded SDR intent prototypes from disk count=6`. Race condition surfaced + fixed: Odin's shutdown-save overwrites the prototypes file with its in-memory state, so deploy order MUST be `stop → cp → start`, not `cp → restart`. **Known follow-up (Sprint 061):** `sdr::binarize` sign-threshold encoding saturates under OR accumulation (popcount 247-254 / 256), so Hamming similarity vs. queries stays below the 0.70 threshold → `method=Fallback` in logs. The pipeline is correct; the encoding needs a sparser top-K variant.
+- ✅ **Semantic-diff pre-push check shipped** at [scripts/diff-deployed-config.sh](../scripts/diff-deployed-config.sh) + opt-in hook at [.githooks/pre-push](../.githooks/pre-push). Compares deployed Munin `/etc/yggdrasil/odin/config.json` flows against `deploy/config-templates/*-flow.json`, plus cross-checks each backend's `models[]` against the live Ollama tag list. Enable via `git config core.hooksPath .githooks`. Auto-fails-open when Munin is unreachable (offline laptop, different network). **Two template drifts backfilled** as a demonstration (`coding_swarm.loop_config.feedback_key`, `ui_design.loop_config.feedback_key`). 7 other drifts flagged + remain for a separate backfill pass (mostly `agent_config.default_tiers: ["safe"]` missing on 5 flows, plus the `research` flow not deployed).
+- ✅ **MCP E2E verification (8 probes):** 6 hard-pass, 2 documented caveats.
+  - ✅ `service_health_tool`: 6/6 UP (Odin 7 ms, Mimir 1 ms, Muninn 3 ms, Qdrant 0 ms)
+  - ✅ `list_models_tool`: fusion-v6:latest + both Nemotron instances + all warmup models present
+  - ✅ `query_memory_tool`: Sprint 059 close-out engram top hit
+  - ⚠ `search_code_tool`: Huginn index hasn't ingested commit `74de2ff` yet — transient, not a regression
+  - ✅ `delegate_tool` (executor): produced idiomatic `swap()`-based Rust
+  - ✅ `network_topology_tool`: 5 mesh entries incl. munin-ollama-b
+  - ✅ Fusion V6 via Odin: see above
+  - ⚠ SDR method logs: still `method=Fallback` — saturation issue, Sprint 061 scope
+- ✅ **vsce/ovsx publish** appended to [memory/project_wishlist.md](~/.claude/projects/-home-jesushernandez-Documents-Code-Yggdrasil/memory/project_wishlist.md). Blocked only on external publisher-ID registration; all extension-side prereqs already shipped in v0.8.0.
+
+## Phase I — MCP tooling hardening (surprise from Phase H)
+
+`mcp__yggdrasil__deploy_tool` turned out to be mis-architected: registered on `ygg-mcp-remote` (Munin:9093) but its `build` action needs the workstation's cargo toolchain (Munin has no cargo). Three rounds of fix:
+
+1. **Moved `deploy_tool` to the local stdio server** ([crates/ygg-mcp/src/local_server.rs](../crates/ygg-mcp/src/local_server.rs)) so cargo is reachable. New tool name: `mcp__yggdrasil-local__deploy_tool`. Old remote tool still exists until we redeploy `ygg-mcp-remote` to Munin.
+2. **Fixed workspace_path** in `~/.config/yggdrasil/local-mcp.yaml` (was pointing one directory too high).
+3. **Rewrote the deploy action** in [crates/ygg-mcp/src/tools.rs](../crates/ygg-mcp/src/tools.rs): now rsyncs to `/tmp/<svc>.new`, ssh-and-sudo-cp to `/opt/yggdrasil/bin/<svc>.new`, atomic `mv` over the final path (solves "Text file busy" on running executables), explicit `systemctl restart yggdrasil-<svc>.service`. Added `deploy_user` + `deploy_sudo_password` fields to `McpServerConfig` (config file at `chmod 600`), with `$YGG_SUDO_PASSWORD` env var override.
+
+Feedback engrams stored: `3e2a4354` (tool location), `0ee58d0c` (workspace_path).
+
+## Phase J — Sprint 061 research seeding
+
+Four research engrams stored for the next planning session:
+
+- `aa0fee24` — Swarm KV sharing: DroidSpeak, KVCOMM (best fit for our heterogeneous swarm), segment-level KV from the user-requested OpenReview 2026 paper.
+- `3a59b09f` — KV compression + NVMe offload: TurboQuant (Google DeepMind, 5-6× compression), LMCache (hierarchical GPU→CPU→NVMe tiering), vLLM 0.12 native offload, KVSwap.
+- `70f7d346` — Always-warm / "dream cycle": vLLM Sleep Mode is the closest published analogue (18-200× faster model switching). The rehearsal / idle-cycle self-play half appears to be Yggdrasil-original — good scope for Sprint 061.
+- `70d2c451` — Retro-terminal chat UI: RetroUI + vault66-crt-effect as the drop-in React components; Fallout Pip-Boy CSS references for the aesthetic. Visual change is orthogonal to the flow-level "swarm as single AI" abstraction.
+
+## Sprint 060 carry to Sprint 061
+
+- SDR router saturation — replace sign-threshold `binarize` with sparser top-K encoding (or lower the 0.70 threshold).
+- Template drift backfill — 5 flows missing `default_tiers: ["safe"]` on `agent_config`; `research` flow needs deploying.
+- Remove the broken remote `deploy_tool` from `ygg-mcp/src/server.rs` and redeploy `ygg-mcp-remote` to Munin.
+- Huginn re-index cycle — commit `74de2ff` + Sprint 060 follow-up commit need to surface in `search_code_tool`.

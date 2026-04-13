@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Yggdrasil pre-push hook — blocks pushes when the deployed Munin config drifts
+# from repo templates (or references model tags Ollama doesn't actually serve).
+#
+# Opt-in: this hook lives under .githooks/ not .git/hooks/. Enable it per-clone
+# via:
+#   git config core.hooksPath .githooks
+#
+# Disable a single push with:
+#   git push --no-verify
+#
+# The check does nothing when the deployed Munin config is unreachable
+# (offline laptop, different network) — it fails open rather than blocking.
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+CHECK="$REPO_ROOT/scripts/diff-deployed-config.sh"
+
+[ -x "$CHECK" ] || exit 0  # no check installed → skip
+
+# Quick reachability probe — if Munin isn't reachable, don't block the push.
+if ! ssh -o ConnectTimeout=2 -o BatchMode=yes "${SSH_USER:-jhernandez}@${SSH_HOST:-munin}" "exit 0" 2>/dev/null; then
+    echo "[pre-push] Munin unreachable — skipping deploy-drift check"
+    exit 0
+fi
+
+echo "[pre-push] running deploy-drift check against Munin..."
+if ! "$CHECK"; then
+    cat <<'EOF'
+
+Push BLOCKED: deployed Munin config differs from repo templates.
+
+Review the diff above:
+  - If the drift is intentional, update deploy/config-templates/*.json to match
+    and re-commit before pushing.
+  - If the deployed state is wrong, roll the deployed config forward with jq
+    (see docs/sprint-059.md §Phase G for the fusion-v6 precedent).
+
+Bypass this check for a single push with:   git push --no-verify
+
+EOF
+    exit 1
+fi

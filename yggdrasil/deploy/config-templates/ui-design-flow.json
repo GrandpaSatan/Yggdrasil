@@ -11,7 +11,8 @@
                 "max_iterations": 2,
                 "convergence_pattern": "APPROVED|LGTM",
                 "restart_from_step": "visual_review",
-                "check_step": "visual_review"
+                "check_step": "visual_review",
+                "feedback_key": "final_ui"
             },
             "steps": [
                 {
