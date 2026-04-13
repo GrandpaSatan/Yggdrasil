@@ -2,9 +2,23 @@
   "name": "yggdrasil-local",
   "displayName": "Yggdrasil",
   "description": "Control panel for the Yggdrasil local-AI ecosystem — flows, memory, config, chat.",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "publisher": "yggdrasil",
   "license": "MIT",
+  "icon": "icon.png",
+  "galleryBanner": {
+    "color": "#09090b",
+    "theme": "dark"
+  },
+  "homepage": "https://github.com/GrandpaSatan/Yggdrasil",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/GrandpaSatan/Yggdrasil.git"
+  },
+  "bugs": {
+    "url": "https://github.com/GrandpaSatan/Yggdrasil/issues"
+  },
+  "qna": "marketplace",
   "engines": {
     "vscode": "^1.80.0"
   },
@@ -48,6 +62,48 @@
         }
       ]
     },
+    "walkthroughs": [
+      {
+        "id": "yggdrasil.welcome",
+        "title": "Get Started with Yggdrasil",
+        "description": "Connect to your Yggdrasil server and open your first chat",
+        "steps": [
+          {
+            "id": "welcome",
+            "title": "What is Yggdrasil?",
+            "description": "A self-hosted local-AI ecosystem with a router, memory, and chat client.",
+            "media": { "markdown": "media/walkthrough/welcome.md" }
+          },
+          {
+            "id": "configure-odin",
+            "title": "Configure Odin (the router)",
+            "description": "Tell the extension where to find your Odin server.",
+            "media": { "markdown": "media/walkthrough/configure-odin.md" },
+            "completionEvents": ["onCommand:yggdrasil.openSettings"]
+          },
+          {
+            "id": "configure-mimir",
+            "title": "Configure Mimir (memory, optional)",
+            "description": "Connect the engram memory service for /memory recall.",
+            "media": { "markdown": "media/walkthrough/configure-mimir.md" }
+          },
+          {
+            "id": "explore-flows",
+            "title": "Explore the Flows",
+            "description": "See how multi-model pipelines like coding_swarm work.",
+            "media": { "markdown": "media/walkthrough/explore-flows.md" },
+            "completionEvents": ["onCommand:yggdrasil.openFlows"]
+          },
+          {
+            "id": "open-chat",
+            "title": "Open the Chat Panel",
+            "description": "Stream from your local AI fleet right in your editor.",
+            "media": { "markdown": "media/walkthrough/open-chat.md" },
+            "completionEvents": ["onCommand:yggdrasil.openChat"]
+          }
+        ]
+      }
+    ],
     "commands": [
       {
         "command": "yggdrasil.openFlows",
@@ -213,27 +269,27 @@
         },
         "yggdrasil.odinUrl": {
           "type": "string",
-          "default": "http://10.0.65.8:8080",
+          "default": "http://localhost:8080",
           "description": "Odin router URL — chat completions, model list, flow CRUD"
         },
         "yggdrasil.mimirUrl": {
           "type": "string",
-          "default": "http://10.0.65.8:9090",
+          "default": "http://localhost:9090",
           "description": "Mimir memory service URL"
         },
         "yggdrasil.huginUrl": {
           "type": "string",
-          "default": "http://10.0.65.9:11434",
-          "description": "Hugin Ollama URL"
+          "default": "http://localhost:11434",
+          "description": "Hugin Ollama URL (reviewer + vision node)"
         },
         "yggdrasil.giteaUrl": {
           "type": "string",
-          "default": "http://10.0.65.11:3000",
-          "description": "Gitea server URL for auto-updates"
+          "default": "http://localhost:3000",
+          "description": "Gitea server URL for auto-updates (set to your homelab Gitea instance)"
         },
         "yggdrasil.giteaRepo": {
           "type": "string",
-          "default": "jesus/Yggdrasil",
+          "default": "you/Yggdrasil",
           "description": "Gitea repo (owner/name) for release downloads"
         },
         "yggdrasil.autoUpdate.enabled": {

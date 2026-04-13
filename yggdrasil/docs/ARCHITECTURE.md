@@ -148,3 +148,23 @@ Claude Code → ygg-mcp-remote → Odin :8080
 ## Sprint 054 Changes
 
 Internal error from Odin (HTTP 502 Bad Gateway): {"error":{"code":null,"message":"openai backend connection failed: error sending request for url (http://morrigan.local:8080/v1/chat/completions)","type":"server_error"}}
+
+## Sprint 058 Changes
+
+Coding swarm pipeline shipped. Eight production flows now live in Odin (`coding_swarm`, `code_qa`, `code_docs`, `devops`, `ui_design`, `dba`, `complex_reasoning`, `perceive`) using cross-architecture review: NVIDIA Mamba+Attention coder (`nemotron-3-nano:4b`) on Munin → Google dense reviewer (`gemma4:e4b`) on Hugin → coder refine. Z.ai MoE reasoner (`glm-4.7-flash`) handles planning + complex reasoning on Munin.
+
+Final HumanEval+ benchmark (164 tasks):
+- Monolith `qwen3-coder-next` 80B MoE on Morrigan: **89.6% base / 86.0% Plus**
+- Swarm (Hugin+Munin, ~10GB combined VRAM): **80.5% base / 77.4% Plus**
+- Swarm matched monolith on 75% of tasks and solved 9 the monolith couldn't (cross-architecture review catches different bug classes). Review loop adds **+14pp** over coder-alone (66.5% → 80.5%).
+
+Production decisions:
+- Default to swarm for routine coding (5× lighter, always-on hardware)
+- Reserve monolith for `complex_reasoning` flow
+- Cross-architecture diversity is permanent — never collapse coder + reviewer into same model family
+
+Decommissioned: `ollama-igpu.service` on Hugin (no longer needed once Nemotron replaced qwen3-coder).
+
+Open bug for Sprint 059 P0: Odin's semantic router is non-functional — `llm_router.ollama_url` points to dead endpoint, `llm_router.model` empty, `odin-sdr-prototypes.json` empty. All 8 flows are deployed but unreachable via intent dispatch. Benchmark used external orchestration as workaround.
+
+See `docs/sprint-058-bench-findings.md` for the full writeup and `docs/sprint-058-flows.html` for the visual dashboard.

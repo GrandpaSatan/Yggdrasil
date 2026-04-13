@@ -176,15 +176,31 @@ The MCP layer is split into two servers (Sprint 027, updated Sprint 050):
 | `sync_docs_tool` | Sprint lifecycle: setup workspace, update USAGE.md on start, archive on end |
 | `screenshot_tool` | Headless Chromium page capture via Puppeteer |
 
-**Visual Features (VS Code extension):**
-| Feature | Description |
-|---------|-------------|
-| Status Bar | `$(database) Ygg: N recalled · N stored` — click to open dashboard |
-| Output Channel | "Yggdrasil Memory" — timestamped event log |
-| Notifications | Configurable toasts on ingest/error (settings: `yggdrasil.notifications.*`) |
-| Dashboard | Webview panel (Ctrl+Shift+M) — session stats, event timeline |
+**Visual Features (VS Code extension v0.6.0+):**
+| Feature | Keybinding | Description |
+|---------|-----------|-------------|
+| Activity Bar Sidebar | — | Yggdrasil tree icon: Flows tree (13 flows grouped by Architecture / Coding / Existing) + Models tree (live state, 30s refresh) |
+| Memory Dashboard | `Ctrl+Shift+M` | Webview — session stats (recalled/stored/errors/sidecar), event timeline |
+| Flows Explorer | `Ctrl+Shift+Y` | Full-width WebviewPanel — topology, AI distribution, per-flow tabs with system-prompt disclosures + animated SVG flow diagrams |
+| Chat Panel | `Ctrl+Shift+I` | Continue/Cline-style streaming chat over Odin — model picker, flow picker, attachment chips (file/selection), markdown renderer, threaded history (up to 50 threads in `globalState`) |
+| Settings Panel | (palette: `Yggdrasil: Open Settings`) | 4 tabs — Endpoints (with health probe buttons), Flows (per-step editor with model picker / system prompt / input template / temperature / loop_config), Notifications & Hooks, Secrets (SecretStorage-backed) |
+| Status Bar | — | `$(database) Ygg: N recalled · N stored` — click to open Memory Dashboard |
+| Output Channel | (palette: `Yggdrasil: Show Memory Log`) | "Yggdrasil Memory" — timestamped event log |
+| Notifications | — | Configurable toasts on ingest/error (settings: `yggdrasil.notifications.*`) |
+| Editor: Explain Selection | `Ctrl+Shift+E` | Right-click selection → opens chat panel pre-seeded with the selected code + an "explain" prompt |
+| Editor: Edit With Model | (right-click selection) | Prompts for instruction → opens chat panel with code + edit prompt + `coding_swarm` flow hint |
+| Editor: Ask About File | (right-click) | Opens chat with current file as attachment chip |
 
-**Auto-Update:** On each session start, `ygg-memory.sh` compares `package.json` version against installed extension version. On mismatch: background rebuild + reinstall. Bump `package.json` version, push, all workstations update automatically.
+**Slash commands** (in chat input):
+| Command | Effect |
+|---------|--------|
+| `/flow <name> <msg>` | Pin a flow for this turn (e.g. `/flow coding_swarm write a cache`) |
+| `/model <id> <msg>` | Override model for this turn |
+| `/memory <query>` | Inject Mimir recall results as system context |
+| `/clear` | Wipe current thread |
+| `/help` | List commands |
+
+**Auto-Update:** On startup, the extension checks `${yggdrasil.giteaUrl}/api/v1/repos/${yggdrasil.giteaRepo}/releases/latest` and downloads the attached `.vsix` if newer than installed version. Rate-limited to once per hour. **Caveat:** if your Gitea instance has `REQUIRE_SIGNIN_VIEW` enabled, the unauthenticated check returns null. v0.7.0 will add optional Gitea-token support via SecretStorage; for now, manually install or disable the Gitea-wide signin requirement.
 
 ---
 

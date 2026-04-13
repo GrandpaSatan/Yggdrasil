@@ -1,145 +1,134 @@
-# Yggdrasil Local — VS Code Extension
+# Yggdrasil — VS Code Extension
 
-Memory monitor + dashboard for the Yggdrasil MCP ecosystem. Shows real-time memory operations (recall, ingest, consolidation) in your VS Code status bar, output channel, and a webview dashboard.
+A control panel and chat client for **Yggdrasil**, a self-hosted local-AI ecosystem. Wraps an Ollama-backed model fleet behind a unified router (Odin), an engram memory service (Mimir), and an OpenAI-compatible chat API. This extension gives you the editor surface for all of it.
 
-## Quick Install (New Workstation)
+> **Heads up:** Defaults assume an Odin server on `localhost:8080`. The walkthrough on first install asks for your real endpoints. Yggdrasil itself is open-source — see the homepage for a self-host guide.
 
-The fastest way to set up everything (MCP servers, extension, hooks, config) on a fresh machine:
+## Features
 
-```bash
-cd /path/to/yggdrasil/deploy/workstation
-MUNIN_IP=<munin-ip> HUGIN_IP=<hugin-ip> ./ClaudeClient_Install
-```
+### Activity Bar Sidebar
+- **Flows tree** — every flow your Odin instance exposes, grouped by Architecture / Coding / Existing. Click to open the full-width Flows Explorer focused on that flow.
+- **Models tree** — live list of models from `GET /v1/models`, grouped by backend, with a `loaded` indicator pulled from `/api/ps`. Auto-refreshes every 30 s.
 
-This handles it all. You're done. Restart Claude Code.
+### Flows Explorer  (`Ctrl+Shift+Y`)
+A full-width WebviewPanel that mirrors `sprint-058-flows.html` — topology diagram, AI distribution map (which model on which node), and a tab per flow with:
+- Animated SVG flow chart (user → step1 → step2 → response, with loop arcs for iterative flows like `coding_swarm`)
+- Step-assignment table: backend, model, role badge
+- **System-prompt disclosures per step** — click "view prompt" to see the exact `system_prompt`, `input_template`, and `temperature` each step uses
 
-## Manual Install (Extension Only)
+### Chat Panel  (`Ctrl+Shift+I`)
+Continue/Cline-style streaming chat over Odin's OpenAI-compatible `/v1/chat/completions`:
+- Model picker (populated from `/v1/models`, grouped by backend, `●` indicator for loaded)
+- Flow picker — pin a flow for the current turn (`/flow coding_swarm` shorthand)
+- Attachment chips — attach the current file or selection as context
+- Markdown rendering with code-fence copy buttons
+- Threaded history (up to 50 threads in `globalState`)
+- Stop button cancels in-flight stream
+- Slash commands: `/flow`, `/model`, `/memory`, `/clear`, `/help`
 
-If you only need the VS Code extension and already have the MCP servers configured:
+### Settings Panel  (palette: `Yggdrasil: Open Settings`)
+Four tabs that consolidate every Yggdrasil knob into one place:
+1. **Endpoints** — Odin / Mimir / Hugin / Gitea URLs with health-probe buttons
+2. **Flows** — pick any flow, edit each step's model / system prompt / input template / temperature / max_tokens / loop config; saves via `PUT /api/flows/:id` to Odin (gracefully falls back to local JSON read when that endpoint isn't deployed yet)
+3. **Notifications & Hooks** — event-type filter, sound toggle, "Reinstall hooks" button
+4. **Secrets** — Gitea token, Home Assistant token, Brave Search key — stored in VS Code's `SecretStorage` (OS keychain-backed: macOS Keychain, Windows Credential Vault, Linux libsecret)
 
-```bash
-cd extensions/yggdrasil-local
-npm install
-npm run compile
-npx @vscode/vsce package --no-dependencies
-code --install-extension yggdrasil-local-*.vsix --force
-```
+### Editor Code Actions (right-click → `yggdrasil` group)
+- **Yggdrasil: Explain Selection** (`Ctrl+Shift+E`) — opens chat seeded with the selection + an explain prompt
+- **Yggdrasil: Edit With Model** — prompts you for an instruction, then opens chat with the selection + edit prompt + `coding_swarm` flow hint
+- **Yggdrasil: Ask About This File** — opens chat with the active file as an attachment chip
 
-Restart VS Code to activate.
+### Memory Dashboard  (`Ctrl+Shift+M`)
+Webview panel with session stats — recalled / stored / errors / sidecar engrams, plus an event timeline of the last 20 memory operations. Driven by JSONL events emitted by the bundled `ygg-memory.sh` Claude Code hooks.
+
+### Status Bar
+`$(database) Ygg: N recalled · N stored` — click to open the dashboard. Color reflects MCP/Mimir reachability (green/yellow/red).
+
+### Auto-Updater
+On startup (max once per hour) the extension checks `${yggdrasil.giteaUrl}/api/v1/repos/${yggdrasil.giteaRepo}/releases/latest` and downloads + installs the attached `.vsix` if newer than installed. Disable with `yggdrasil.autoUpdate.enabled: false`.
+
+## Quick Start
+
+1. Install the `.vsix`:
+   ```bash
+   code --install-extension yggdrasil-local-*.vsix
+   ```
+2. Reload VS Code (`Ctrl+Shift+P` → `Developer: Reload Window`).
+3. The walkthrough runs on first activation — enter your Odin URL, test connectivity, pick a default flow, open the chat.
+
+If you don't have a Yggdrasil server running, see the [Yggdrasil README](https://github.com/GrandpaSatan/Yggdrasil) for the self-host setup (Munin + Hugin nodes, Odin router, Mimir memory).
+
+## Configuration
+
+Every setting is editable via the Settings panel UI or directly in `settings.json`:
+
+| Setting | Default | What it does |
+|---|---|---|
+| `yggdrasil.odinUrl` | `http://localhost:8080` | Odin router (chat, models, flow CRUD) |
+| `yggdrasil.mimirUrl` | `http://localhost:9090` | Mimir engram memory service |
+| `yggdrasil.huginUrl` | `http://localhost:11434` | Direct Ollama (reviewer/vision node) |
+| `yggdrasil.giteaUrl` | `http://localhost:3000` | Gitea — auto-updater source |
+| `yggdrasil.giteaRepo` | `you/Yggdrasil` | Gitea repo `owner/name` |
+| `yggdrasil.autoUpdate.enabled` | `true` | Hourly check for new `.vsix` |
+| `yggdrasil.hooks.managed` | `true` | Auto-install Claude Code hooks in `~/.claude/settings.json` |
+| `yggdrasil.eventsFile` | `/tmp/ygg-hooks/memory-events.jsonl` | JSONL stream from `ygg-memory.sh` hooks |
+| `yggdrasil.notifications.enabled` | `true` | Show toasts on memory events |
+| `yggdrasil.notifications.sound` | `false` | Play `paplay` audio cue on store |
+| `yggdrasil.notifications.events` | `["ingest", "error"]` | Which event types trigger toasts |
 
 ## Architecture
 
 ```
- Claude Code hooks                    Rust MCP server
- (ygg-memory.sh)                     (ygg-mcp-server)
-       |                                    |
-       |  init/recall/ingest/sleep          |  tool calls (sync_docs, screenshot)
-       |                                    |
-       v                                    v
-  /tmp/ygg-hooks/memory-events.jsonl  <-- shared JSONL file
-                    |
-                    v
-          VS Code Extension (this)
-          - Status bar: recalled/stored counts
-          - Dashboard: Ctrl+Shift+M
-          - Notifications: toast on ingest/error
-          - Output channel: "Yggdrasil Memory"
+                  ┌──────────────────────────┐
+   user ────►     │   VS Code Extension      │
+                  │                          │
+                  │  • Chat Panel  ─────┐    │
+                  │  • Flows Panel      │    │
+                  │  • Settings Panel   │    │
+                  │  • Models Tree      │    │
+                  └─────────────────────│────┘
+                                        │ HTTP (SSE for chat)
+                                        ▼
+                  ┌──────────────────────────┐
+                  │   Odin Router            │  ← intent classification + flow dispatch
+                  │   (Rust, port 8080)      │
+                  └────────┬─────────────────┘
+                           │
+       ┌───────────────────┼─────────────────────┐
+       ▼                   ▼                     ▼
+   Munin Ollama      Hugin Ollama           Morrigan
+   (coder, glm,      (reviewer +            (on-demand
+    fusion-v6, ...)   vision)                inference VM)
 ```
 
-**Two event sources, one file:**
+The extension speaks plain HTTP; you can point it at any OpenAI-compatible server, but the Flows / Settings panels assume Odin's `/api/flows` schema.
 
-1. **`ygg-memory.sh`** (Claude Code hooks) — emits `init`, `recall`, `ingest`, `sleep`, `error` events on each session lifecycle stage.
-2. **`ygg-mcp-server`** (Rust binary) — emits `tool` events after each `sync_docs_tool` or `screenshot_tool` call. Requires `events_file` in its config.
+## Known Limitations
 
-The extension watches the JSONL file and fans out events to all UI components.
-
-## MCP Server Setup
-
-The **Rust binary** (`ygg-mcp-server`) is the canonical local MCP server. It provides `sync_docs_tool` and `screenshot_tool` over stdio.
-
-Do NOT use the Node.js server that used to live in `src/mcp/` — it was removed. The Rust binary is what `ClaudeClient_Install` builds and configures.
-
-### Config file: `~/.config/yggdrasil/local-mcp.yaml`
-
-Generated per-workstation by `ClaudeClient_Install`. Key fields:
-
-```yaml
-odin_url: "http://<munin-ip>:8080"      # Odin LLM gateway
-muninn_url: "http://<hugin-ip>:9091"    # Muninn search (optional)
-timeout_secs: 300
-workspace_path: "/home/you/your-project"
-remote_url: "http://<munin-ip>:9093"    # Remote MCP for config sync
-events_file: "/tmp/ygg-hooks/memory-events.jsonl"  # <-- enables VS Code integration
-```
-
-### MCP registration: `~/.claude.json`
-
-Also generated by `ClaudeClient_Install`:
-
-```json
-{
-  "mcpServers": {
-    "yggdrasil": {
-      "type": "http",
-      "url": "http://<munin-ip>:9093/mcp",
-      "headers": { "X-Client": "claude-code" }
-    },
-    "yggdrasil-local": {
-      "type": "stdio",
-      "command": "/path/to/yggdrasil/target/release/ygg-mcp-server",
-      "args": ["--config", "/home/you/.config/yggdrasil/local-mcp.yaml"],
-      "env": {}
-    }
-  }
-}
-```
-
-**Do NOT create project-level `.mcp.json` files** that override this. If one exists and points to a dead `out/mcp/server.js`, delete it — `ClaudeClient_Install` cleans these up automatically.
-
-## VS Code Commands
-
-| Command | Keybinding | Description |
-|---------|------------|-------------|
-| `Yggdrasil: Open Memory Dashboard` | `Ctrl+Shift+M` | Session stats + event timeline |
-| `Yggdrasil: Show Memory Log` | — | Open the "Yggdrasil Memory" output channel |
-| `Yggdrasil: Toggle Notifications` | — | Enable/disable toast notifications |
-
-## Settings
-
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `yggdrasil.eventsFile` | `/tmp/ygg-hooks/memory-events.jsonl` | JSONL event file path |
-| `yggdrasil.notifications.enabled` | `true` | Show toast notifications |
-| `yggdrasil.notifications.sound` | `false` | Play audio cue on memory store |
-| `yggdrasil.notifications.events` | `["ingest", "error"]` | Which events trigger toasts |
-
-## Troubleshooting
-
-**Status bar shows nothing:**
-- Check that `ygg-memory.sh` hooks are installed: `cat ~/.claude/settings.json | jq '.hooks'`
-- If hooks are missing, run: `./deploy/workstation/install-memory.sh`
-- Check that `events_file` is set in your local MCP config: `cat ~/.config/yggdrasil/local-mcp.yaml`
-
-**MCP tools not working:**
-- Verify the Rust binary exists: `ls -la target/release/ygg-mcp-server`
-- If missing, rebuild: `cargo build --release --bin ygg-mcp-server`
-- Check `~/.claude.json` points to the Rust binary, NOT `node out/mcp/server.js`
-- If a stale `Documents/Code/.mcp.json` exists, delete it
-
-**Extension not installed:**
-- Check: `code --list-extensions | grep yggdrasil`
-- Manual install: see "Manual Install" section above
+- **Auto-updater + private Gitea**: if your Gitea instance has `REQUIRE_SIGNIN_VIEW` enabled, the unauthenticated `/releases/latest` check returns null and updates won't be picked up. Workaround in v0.7.0 will add optional Gitea-token auth via `SecretStorage`. For now: install the new `.vsix` manually, or disable the Gitea-wide signin requirement.
+- **Settings panel "Save Flow"** posts to `PUT /api/flows/:id` on Odin. If your Odin build doesn't have those endpoints yet (Sprint 058 didn't ship them), the save toast says so — flow viewing still works (read-only fallback to `deploy/config-templates/*.json` from the workspace).
 
 ## Development
 
 ```bash
 cd extensions/yggdrasil-local
-npm run watch    # auto-recompile on save
+npm install
+npm run watch       # auto-recompile on save
 ```
 
-After changes, re-package and reinstall:
+After changes, repackage:
 ```bash
 npm run compile
 npx @vscode/vsce package --no-dependencies
 code --install-extension yggdrasil-local-*.vsix --force
 ```
+
+Open with `Ctrl+Shift+P` → `Developer: Reload Window` to pick up the new build.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
+
+## Issues
+
+Report bugs at the [Yggdrasil issue tracker](https://github.com/GrandpaSatan/Yggdrasil/issues).
