@@ -75,9 +75,6 @@ class FusionConfig:
     save_steps: int = 1000
     difficulty: int = 0
     data_seed: int = 42
-    num_cycles: int = 4
-    plateau_patience: int = 0
-    curriculum: bool = False
 
 
 # ── Code Similarity Eval ────────────────────────────────────────
@@ -271,43 +268,14 @@ class CodeEvalCallback(TrainerCallback):
         print(f"{'='*60}\n")
 
 
-# ── Plateau Early Stopping ─────────────────────────────────────
-
-class PlateauStopCallback(TrainerCallback):
-    """Stop training if eval loss plateaus for too long.
-
-    Unlike AdaptiveGrokCallback (which manipulates LR/WD), this purely
-    monitors eval_loss and stops when no improvement is seen.
-    """
-
-    def __init__(self, patience: int, min_delta: float = 0.001):
-        self.patience = patience
-        self.min_delta = min_delta
-        self.best_eval_loss = float("inf")
-        self.steps_without_improvement = 0
-
-    def on_evaluate(self, args, state: TrainerState, control: TrainerControl,
-                    metrics=None, **kwargs):
-        if not metrics or self.patience <= 0:
-            return
-        eval_loss = metrics.get("eval_loss", float("inf"))
-        if eval_loss < self.best_eval_loss - self.min_delta:
-            self.best_eval_loss = eval_loss
-            self.steps_without_improvement = 0
-        else:
-            self.steps_without_improvement += 1
-        if self.steps_without_improvement >= self.patience:
-            print(f"\n*** PlateauStop: no improvement for {self.patience} evals "
-                  f"(best={self.best_eval_loss:.5f}, current={eval_loss:.5f}). Stopping. ***\n")
-            control.should_training_stop = True
-
-
 # ── Model Loading ───────────────────────────────────────────────
 
-def load_model_and_tokenizer(device_idx: int = 0, base_model: str = DEFAULT_BASE_MODEL,
-                              multi_gpu: bool = False):
+def load_model_and_tokenizer(device_idx: int = 0, base_model: str = DEFAULT_BASE_MODEL, multi_gpu: bool = False):
     """Load model in bf16 for full fine-tuning."""
-    device_map = "auto" if multi_gpu else {"": device_idx}
+    if multi_gpu:
+        device_map = "auto"
+    else:
+        device_map = {"": device_idx}
     model = AutoModelForCausalLM.from_pretrained(
         base_model,
         torch_dtype=torch.bfloat16,
@@ -388,7 +356,7 @@ def run_experiment(
     print(f"  DATA: infinite stream, never repeats")
     print(f"{'='*60}")
 
-    model, tokenizer = load_model_and_tokenizer(device_idx, base_model, multi_gpu)
+    model, tokenizer = load_model_and_tokenizer(device_idx, base_model, multi_gpu=multi_gpu)
 
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total = sum(p.numel() for p in model.parameters())
@@ -397,16 +365,7 @@ def run_experiment(
     print(f"  Estimated VRAM: ~{est_mem:.1f}GB (8-bit Adam)")
 
     # Infinite streaming data
-    if cfg.curriculum:
-        fusion_stream = Fusion360StreamDataset(
-            difficulty=cfg.difficulty, seed=cfg.data_seed,
-            curriculum_steps=cfg.max_steps,
-            batch_size=cfg.batch_size,
-            grad_accum=cfg.grad_accum,
-        )
-        print(f"  CURRICULUM: enabled (L1→L2 @33%, L2→L3 @66%)")
-    else:
-        fusion_stream = Fusion360StreamDataset(difficulty=cfg.difficulty, seed=cfg.data_seed)
+    fusion_stream = Fusion360StreamDataset(difficulty=cfg.difficulty, seed=cfg.data_seed)
     stream_length = cfg.max_steps * cfg.batch_size * cfg.grad_accum * 2
     train_ds = make_hf_stream(fusion_stream, stream_length)
 
@@ -442,11 +401,6 @@ def run_experiment(
     )
     callbacks.append(norm_cb)
 
-    if cfg.plateau_patience > 0:
-        plateau_cb = PlateauStopCallback(patience=cfg.plateau_patience)
-        callbacks.append(plateau_cb)
-        print(f"  PLATEAU STOP: enabled (patience={cfg.plateau_patience} evals)")
-
     training_args = SFTConfig(
         output_dir=str(output_dir / "checkpoints"),
         max_steps=cfg.max_steps,
@@ -455,8 +409,6 @@ def run_experiment(
         gradient_accumulation_steps=cfg.grad_accum,
         learning_rate=cfg.lr,
         lr_scheduler_type=cfg.scheduler,
-        lr_scheduler_kwargs=({"num_cycles": cfg.num_cycles}
-                             if cfg.scheduler == "cosine_with_restarts" else {}),
         warmup_steps=cfg.warmup_steps,
         weight_decay=cfg.weight_decay,
         logging_steps=cfg.logging_steps,
@@ -542,15 +494,12 @@ def main():
         description="Fusion 360 Code Generation — LFM2.5-1.2B (Full FT)"
     )
     parser.add_argument("--gpu", type=int, default=0)
-    parser.add_argument("--multi-gpu", action="store_true",
-                        help="Use device_map=auto to span multiple GPUs")
     parser.add_argument("--output", type=Path, default=Path("output-fusion360"))
     parser.add_argument("--max-steps", type=int, default=10000)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--weight-decay", type=float, default=0.5)
     parser.add_argument("--scheduler", default="constant",
-                        choices=["cosine", "constant", "linear",
-                                 "cosine_with_restarts"])
+                        choices=["cosine", "constant", "linear"])
     parser.add_argument("--warmup-steps", type=int, default=200)
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--grad-accum", type=int, default=16)
@@ -559,20 +508,22 @@ def main():
     parser.add_argument("--difficulty", type=int, default=0)
     parser.add_argument("--data-seed", type=int, default=42)
     parser.add_argument("--base-model", type=str, default=DEFAULT_BASE_MODEL)
-    parser.add_argument("--num-cycles", type=int, default=4,
-                        help="Restart cycles for cosine_with_restarts scheduler")
-    parser.add_argument("--plateau-patience", type=int, default=0,
-                        help="Stop if eval loss doesn't improve for N eval steps (0=disabled)")
-    parser.add_argument("--curriculum", action="store_true",
-                        help="Enable curriculum learning (simple→complex shapes)")
+    parser.add_argument("--multi-gpu", action="store_true",
+                        help="Spread model across all available GPUs (device_map='auto')")
     args = parser.parse_args()
 
     os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
-    print(f"GPU: {torch.cuda.get_device_name(args.gpu)}")
-    mem = torch.cuda.get_device_properties(args.gpu).total_memory
-    print(f"VRAM: {mem / 1e9:.1f} GB")
-    print(f"MODE: FULL fine-tuning + 8-bit Adam (1.2B model)")
+    if args.multi_gpu:
+        ngpu = torch.cuda.device_count()
+        total_mem = sum(torch.cuda.get_device_properties(i).total_memory for i in range(ngpu))
+        print(f"GPUs: {ngpu}x {torch.cuda.get_device_name(0)}")
+        print(f"Total VRAM: {total_mem / 1e9:.1f} GB")
+    else:
+        print(f"GPU: {torch.cuda.get_device_name(args.gpu)}")
+        mem = torch.cuda.get_device_properties(args.gpu).total_memory
+        print(f"VRAM: {mem / 1e9:.1f} GB")
+    print(f"MODE: FULL fine-tuning + 8-bit Adam")
 
     print("\nGenerating eval set (200 problems)...")
     eval_problems = generate_fusion_eval_set(n=200, seed=9999)
@@ -597,13 +548,9 @@ def main():
         save_steps=args.save_steps,
         difficulty=args.difficulty,
         data_seed=args.data_seed,
-        num_cycles=args.num_cycles,
-        plateau_patience=args.plateau_patience,
-        curriculum=args.curriculum,
     )
 
-    run_experiment(cfg, args.output, args.gpu, eval_problems, args.base_model,
-                   args.multi_gpu)
+    run_experiment(cfg, args.output, args.gpu, eval_problems, args.base_model, multi_gpu=args.multi_gpu)
 
 
 if __name__ == "__main__":
