@@ -577,6 +577,10 @@ pub struct SdrConfig {
     /// Replaces the binary dedup_threshold gate with New / Update / Old verdicts.
     #[serde(default)]
     pub novelty: NoveltyConfig,
+    /// Dense cosine novelty gate thresholds (Sprint 067 Phase 1).
+    /// Backs the Three-Tier Dense Cosine Gate: Tier 1 classifier + Tier 2 LLM escalation band.
+    #[serde(default)]
+    pub dense_novelty: DenseNoveltyConfig,
 }
 
 fn default_dedup_threshold() -> f64 {
@@ -627,6 +631,79 @@ fn default_update_threshold() -> f64 {
 }
 
 fn default_levenshtein_tolerance() -> usize {
+    8
+}
+
+/// Dense cosine novelty gate thresholds (Sprint 067 Phase 1 — Three-Tier Dense Cosine Gate).
+///
+/// Unlike `NoveltyConfig` (which operates on the 256-bit SDR Hamming similarity), these
+/// thresholds apply to the full 384-dimensional L2-normalized cosine similarity computed
+/// against the in-memory `DenseIndex`. Tier 1 of the novelty gate consults this classifier
+/// before escalating an Ambiguous band verdict to the Tier 2 store-gate LLM.
+///
+/// Precedence (see `mimir::novelty::classify_dense`): Old → Update → Ambiguous → New.
+/// - `Old`       => cosine >= `old_threshold`       AND effect text near-identical (skip write).
+/// - `Update`    => cosine >= `update_threshold`    AND content meaningfully differs (overwrite).
+/// - `Ambiguous` => cosine >= `ambiguous_floor`     (escalate to store-gate LLM).
+/// - `New`       => everything else (insert as new engram).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DenseNoveltyConfig {
+    /// When `false`, the three-tier gate defers to the legacy SDR path. Per the
+    /// 2026-04-14 scope decision the gate ships live by default, with `enabled=false`
+    /// retained as the per-config rollback lever.
+    #[serde(default = "default_dense_novelty_enabled")]
+    pub enabled: bool,
+    /// Cosine at/above which a near-identical engram is treated as `Old` and skipped.
+    ///
+    /// NOTE: starting thresholds from literature; retuned after Sprint 067 Phase 0 shadow data (24-48h).
+    #[serde(default = "default_dense_old_threshold")]
+    pub old_threshold: f64,
+    /// Cosine at/above which an existing engram is overwritten in-place (`Update`).
+    ///
+    /// NOTE: starting thresholds from literature; retuned after Sprint 067 Phase 0 shadow data (24-48h).
+    #[serde(default = "default_dense_update_threshold")]
+    pub update_threshold: f64,
+    /// Floor of the ambiguous band — cosines at/above this but below `update_threshold`
+    /// escalate to the Tier 2 store-gate LLM. Below this floor => `New`.
+    ///
+    /// NOTE: starting thresholds from literature; retuned after Sprint 067 Phase 0 shadow data (24-48h).
+    #[serde(default = "default_dense_ambiguous_floor")]
+    pub ambiguous_floor: f64,
+    /// Maximum Levenshtein distance on effect text that still qualifies as `Old`.
+    /// Default 8 chars (matches `NoveltyConfig::levenshtein_tolerance`).
+    #[serde(default = "default_dense_levenshtein_tolerance")]
+    pub levenshtein_tolerance: usize,
+}
+
+impl Default for DenseNoveltyConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_dense_novelty_enabled(),
+            old_threshold: default_dense_old_threshold(),
+            update_threshold: default_dense_update_threshold(),
+            ambiguous_floor: default_dense_ambiguous_floor(),
+            levenshtein_tolerance: default_dense_levenshtein_tolerance(),
+        }
+    }
+}
+
+fn default_dense_novelty_enabled() -> bool {
+    true
+}
+
+fn default_dense_old_threshold() -> f64 {
+    0.97
+}
+
+fn default_dense_update_threshold() -> f64 {
+    0.88
+}
+
+fn default_dense_ambiguous_floor() -> f64 {
+    0.80
+}
+
+fn default_dense_levenshtein_tolerance() -> usize {
     8
 }
 

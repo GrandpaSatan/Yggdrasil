@@ -27,6 +27,8 @@
 //! Tokio task and is I/O-bound (PG queries + Odin HTTP call). Peak RSS < 2MB
 //! per cycle (batch of 100 engrams ~50KB text + prompt ~60KB).
 
+use std::sync::Arc;
+
 use tokio::sync::watch;
 use uuid::Uuid;
 
@@ -36,7 +38,9 @@ use ygg_store::postgres::engrams;
 
 use ygg_embed::OnnxEmbedder;
 
+use crate::dense_index::DenseIndex;
 use crate::error::MimirError;
+use crate::sdr_index::SdrIndex;
 
 /// System prompt for the summarization LLM call.
 const SYSTEM_PROMPT: &str = "\
@@ -109,6 +113,8 @@ struct ConsolidationRow {
 pub struct SummarizationService {
     store: Store,
     vectors: VectorStore,
+    sdr_index: Arc<SdrIndex>,
+    dense_index: Arc<DenseIndex>,
     embedder: OnnxEmbedder,
     http: reqwest::Client,
     config: TierConfig,
@@ -121,9 +127,17 @@ impl SummarizationService {
     /// The `shutdown_rx` receiver is subscribed from the `AppState` watch channel.
     /// When `true` is sent on the channel, the background task stops after the
     /// current cycle completes.
+    ///
+    /// `sdr_index` and `dense_index` are held so consolidation can drop deleted
+    /// engram IDs from both in-memory indexes — the dreamer 404 bug (Sprint 067
+    /// Phase 4a) stemmed from consolidation deleting Postgres rows without
+    /// invalidating the stale SDR entries, which then mis-routed later novelty
+    /// verdicts to `Update` for rows that no longer exist.
     pub fn new(
         store: Store,
         vectors: VectorStore,
+        sdr_index: Arc<SdrIndex>,
+        dense_index: Arc<DenseIndex>,
         embedder: OnnxEmbedder,
         config: TierConfig,
         shutdown_rx: watch::Receiver<bool>,
@@ -139,6 +153,8 @@ impl SummarizationService {
         Self {
             store,
             vectors,
+            sdr_index,
+            dense_index,
             embedder,
             http,
             config,
@@ -250,6 +266,15 @@ impl SummarizationService {
                     );
                     let _ = engrams::delete_engram(pool, b.id).await;
                     self.vectors.delete_many("engrams_sdr", &[b.id]).await.ok();
+                    // Sprint 067 Phase 4a: invalidate both in-memory indexes so a
+                    // later store does not resurrect a stale nearest-match pointing
+                    // at a Postgres row that was just deleted — the root cause of
+                    // the dreamer "engram store returned 404" burst logged on
+                    // yggdrasil-dreamer.service. Pairs with the Postgres + Qdrant
+                    // deletes above to keep SDR + dense views coherent with the
+                    // authoritative store.
+                    self.sdr_index.remove(b.id);
+                    self.dense_index.remove(b.id);
                     dedup_count += 1;
                 } else if sim > 0.85 {
                     // High similarity — check for contradiction (divergent effect text)

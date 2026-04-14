@@ -69,6 +69,8 @@ async fn main() -> anyhow::Result<()> {
     let summarization = SummarizationService::new(
         shared_state.store.clone(),
         shared_state.vectors.clone(),
+        Arc::clone(&shared_state.sdr_index),
+        Arc::clone(&shared_state.dense_index),
         shared_state.embedder.clone(),
         shared_state.config.tiers.clone(),
         summarization_rx,

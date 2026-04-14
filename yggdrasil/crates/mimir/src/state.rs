@@ -8,7 +8,7 @@ use ygg_store::qdrant::Distance;
 
 use ygg_embed::OnnxEmbedder;
 
-use crate::{error::MimirError, sdr::Sdr, sdr_index::SdrIndex};
+use crate::{dense_index::DenseIndex, error::MimirError, sdr::Sdr, sdr_index::SdrIndex};
 
 /// SDR collection dimension: 256 bits stored as 256 bipolar floats ({-1.0, 1.0}).
 const SDR_DIM: u64 = 256;
@@ -28,7 +28,19 @@ pub struct AppState {
     /// Qdrant client for vector operations (System 2 / Archival tier).
     pub vectors: VectorStore,
     /// In-memory SDR index (loaded from sdr_bits on startup, updated on every store).
-    pub sdr_index: SdrIndex,
+    ///
+    /// Wrapped in `Arc` so background services (e.g. `SummarizationService`) can hold
+    /// a clone and keep the index coherent with Postgres deletes. Sprint 067 Phase 4a.
+    pub sdr_index: Arc<SdrIndex>,
+    /// In-memory dense 384-dim embedding index (Sprint 067 Phase 0 — shadow observer).
+    ///
+    /// Starts empty on boot and populates via live inserts alongside `sdr_index`.
+    /// Phase 0 queries this purely to log shadow cosine similarities against
+    /// the existing SDR Hamming path so Phase 1 thresholds are empirically
+    /// grounded. No verdict decisions consult this index yet.
+    ///
+    /// Wrapped in `Arc` for the same reason as `sdr_index`.
+    pub dense_index: Arc<DenseIndex>,
     /// ONNX in-process embedder for SDR encoding.
     pub embedder: OnnxEmbedder,
     /// Loaded YAML configuration.
@@ -135,11 +147,18 @@ impl AppState {
         tracing::info!("ONNX embedder ready");
 
         // --- SDR index (System 1: Recall tier fast recall) ---
-        let sdr_index = SdrIndex::new();
+        let sdr_index = Arc::new(SdrIndex::new());
         tracing::info!(
             dim_bits = config.sdr.dim_bits,
             "sdr index created"
         );
+
+        // --- Dense index (Sprint 067 Phase 0 shadow observer) ---
+        // Cold-start pattern: populates via live inserts paired with sdr_index.
+        // No PG backfill at Phase 0 — re-embedding 50k engrams at startup is
+        // deferred to a follow-up sprint once thresholds are calibrated.
+        let dense_index = Arc::new(DenseIndex::new());
+        tracing::info!("dense index created (cold start, shadow observer)");
 
         // --- Shutdown channel ---
         let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
@@ -163,6 +182,7 @@ impl AppState {
             store,
             vectors,
             sdr_index,
+            dense_index,
             embedder,
             config,
             shutdown_tx,

@@ -1,3 +1,4 @@
+pub mod dense_index;
 pub mod error;
 pub mod handlers;
 pub mod linker;

@@ -58,6 +58,19 @@ pub fn engram_content_hash(cause: &str, effect: &str) -> Vec<u8> {
     hasher.finalize().to_vec()
 }
 
+/// Lowercase hex-encode a byte slice without pulling in a new crate.
+///
+/// Used by the Sprint 067 Phase 0 shadow observer so `content_hash` lands in
+/// the structured log as a printable identifier.
+fn hex_encode(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        use std::fmt::Write as _;
+        let _ = write!(s, "{:02x}", b);
+    }
+    s
+}
+
 /// Sprint 065 A·P1: extract partition-prefix tags from free-form cause text.
 ///
 /// Detects `sprint NNN` / `sprint-NNN` / `sprint:NNN` / `sprint NNN` (3 digits)
@@ -283,6 +296,16 @@ pub async fn store_engram(
             &merged_tags,
         );
 
+        // Sprint 067 Phase 0: mirror the SDR insert into the dense index so
+        // the shadow observer reflects post-update state on subsequent stores.
+        state.dense_index.remove(existing_id);
+        state.dense_index.insert_scoped_with_tags(
+            body.project.as_deref(),
+            existing_id,
+            embedding.clone(),
+            &merged_tags,
+        );
+
         // Update both legacy and v2 Qdrant collections
         let sdr_f32 = sdr::to_bipolar_f32(&sdr_val);
         let payload = build_qdrant_payload(body.project.as_deref(), scope);
@@ -296,6 +319,74 @@ pub async fn store_engram(
             .await?;
 
         return Ok((StatusCode::OK, Json(serde_json::json!({ "id": existing_id, "updated": true }))));
+    }
+
+    // Step 4a: Sprint 067 Phase 0 shadow observer.
+    //
+    // Compute the best-match SDR Hamming similarity AND the best-match dense
+    // cosine similarity for the incoming engram, then log them side-by-side.
+    // Does NOT affect any verdict decision — the existing SDR + store_gate
+    // path below remains the sole decider. Phase 1 uses 24–48h of these logs
+    // to calibrate the cosine thresholds empirically rather than guessing.
+    //
+    // Both queries honour the same partition/tag scoping the real triage uses,
+    // so the logged similarities reflect what the future Tier 1 dense gate
+    // would actually see.
+    {
+        let (sdr_best_id, sdr_best_sim) = if let Some(ref proj) = body.project {
+            if partition_tags.is_empty() {
+                state
+                    .sdr_index
+                    .query_scoped(&sdr_val, proj, true, 1)
+                    .into_iter()
+                    .next()
+            } else {
+                state
+                    .sdr_index
+                    .query_scoped_with_tags(&sdr_val, proj, true, &partition_tags, 1)
+                    .into_iter()
+                    .next()
+            }
+        } else {
+            state.sdr_index.query(&sdr_val, 1).into_iter().next()
+        }
+        .map(|(id, sim)| (Some(id), sim))
+        .unwrap_or((None, f64::NAN));
+
+        let (dense_best_id, dense_best_sim) = if let Some(ref proj) = body.project {
+            if partition_tags.is_empty() {
+                state
+                    .dense_index
+                    .query_scoped_with_tags(&embedding, proj, true, &[], 1)
+                    .into_iter()
+                    .next()
+            } else {
+                state
+                    .dense_index
+                    .query_scoped_with_tags(&embedding, proj, true, &partition_tags, 1)
+                    .into_iter()
+                    .next()
+            }
+        } else {
+            state.dense_index.query(&embedding, 1).into_iter().next()
+        }
+        .map(|(id, sim)| (Some(id), sim))
+        .unwrap_or((None, f64::NAN));
+
+        let content_hash_hex = hex_encode(&content_hash);
+        let partition_tags_str = partition_tags.join(",");
+
+        tracing::info!(
+            shadow_log = true,
+            content_hash = %content_hash_hex,
+            project = ?body.project,
+            partition_tags = %partition_tags_str,
+            sdr_hamming_sim = sdr_best_sim,
+            dense_cosine_sim = dense_best_sim,
+            sdr_best_id = ?sdr_best_id,
+            dense_best_id = ?dense_best_id,
+            "novelty_shadow_observe"
+        );
     }
 
     // Step 4b: Novelty triage (Sprint 064 P1) — server-side New / Update / Old verdict.
@@ -471,6 +562,15 @@ pub async fn store_engram(
                         &merged_tags,
                     );
 
+                    // Sprint 067 Phase 0: mirror into dense index.
+                    state.dense_index.remove(id);
+                    state.dense_index.insert_scoped_with_tags(
+                        body.project.as_deref(),
+                        id,
+                        embedding.clone(),
+                        &merged_tags,
+                    );
+
                     let sdr_f32 = sdr::to_bipolar_f32(&sdr_val);
                     let payload = build_qdrant_payload(body.project.as_deref(), scope);
                     state
@@ -535,6 +635,16 @@ pub async fn store_engram(
     state
         .sdr_index
         .insert_scoped_with_tags(body.project.as_deref(), id, sdr_val, &merged_tags);
+
+    // Sprint 067 Phase 0: mirror the SDR insert into the dense index so the
+    // shadow observer on subsequent stores can compute cosine against the
+    // full 384-dim embedding we just committed.
+    state.dense_index.insert_scoped_with_tags(
+        body.project.as_deref(),
+        id,
+        embedding.clone(),
+        &merged_tags,
+    );
 
     // Step 10: Upsert into both legacy and v2 Qdrant collections
     let sdr_f32 = sdr::to_bipolar_f32(&sdr_val);
