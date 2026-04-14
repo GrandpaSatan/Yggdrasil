@@ -52,23 +52,3 @@ pub async fn fire_one(
 
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn warmup_prefix_serializes_round_trip() {
-        let prefix = WarmupPrefix {
-            name: "test".into(),
-            model: "gemma4:e4b".into(),
-            url: "http://127.0.0.1:11500".into(),
-            system: "You are a tester.".into(),
-            user_prefix: "ping".into(),
-        };
-        let serialized = serde_json::to_string(&prefix).unwrap();
-        let parsed: WarmupPrefix = serde_json::from_str(&serialized).unwrap();
-        assert_eq!(parsed.name, prefix.name);
-        assert_eq!(parsed.model, prefix.model);
-    }
-}

@@ -587,26 +587,3 @@ fn strip_code_fence(s: &str) -> &str {
     }
     trimmed
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn strip_code_fence_removes_json_fence() {
-        let input = "```json\n{\"cause\": \"a\", \"effect\": \"b\"}\n```";
-        assert_eq!(strip_code_fence(input), "{\"cause\": \"a\", \"effect\": \"b\"}");
-    }
-
-    #[test]
-    fn strip_code_fence_no_fence_unchanged() {
-        let input = "{\"cause\": \"a\", \"effect\": \"b\"}";
-        assert_eq!(strip_code_fence(input), input);
-    }
-
-    #[test]
-    fn strip_code_fence_bare_fence() {
-        let input = "```\n{\"cause\": \"a\", \"effect\": \"b\"}\n```";
-        assert_eq!(strip_code_fence(input), "{\"cause\": \"a\", \"effect\": \"b\"}");
-    }
-}

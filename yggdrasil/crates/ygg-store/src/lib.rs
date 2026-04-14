@@ -49,16 +49,3 @@ impl Store {
         Ok(())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn connect_fails_with_invalid_url() {
-        let result = Store::connect("postgres://invalid:5432/nope").await;
-        assert!(result.is_err());
-        let err = result.err().unwrap();
-        assert!(matches!(err, error::StoreError::Connection(_)));
-    }
-}

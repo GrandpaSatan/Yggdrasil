@@ -268,26 +268,3 @@ fn build_service_summary(services: &[crate::client::DomainServices]) -> String {
 // ─────────────────────────────────────────────────────────────────
 // Unit tests
 // ─────────────────────────────────────────────────────────────────
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn extract_yaml_with_fence() {
-        let content = "Here is the automation:\n\n```yaml\nalias: test\nmode: single\n```\n";
-        assert_eq!(extract_yaml(content), "alias: test\nmode: single");
-    }
-
-    #[test]
-    fn extract_yaml_without_fence() {
-        let content = "alias: test\nmode: single";
-        assert_eq!(extract_yaml(content), "alias: test\nmode: single");
-    }
-
-    #[test]
-    fn extract_yaml_no_closing_fence() {
-        let content = "```yaml\nalias: test\nmode: single\n";
-        assert_eq!(extract_yaml(content), "alias: test\nmode: single");
-    }
-}

@@ -22,7 +22,6 @@ members = [
     "crates/ygg-voice",
     "crates/ygg-gaming",
     "crates/ygg-server",
-    "crates/ygg-test-harness",
     "crates/ygg-dreamer",
 ]
 

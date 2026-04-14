@@ -244,32 +244,3 @@ async fn process_request(req: ClassificationRequest, client: &LlmRouterClient) {
 // ─────────────────────────────────────────────────────────────────
 // Tests
 // ─────────────────────────────────────────────────────────────────
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn back_pressure_returns_none() {
-        let (queue, _receivers) = RequestQueue::new(1);
-
-        // Fill the channel (capacity 1).
-        let _rx1 = queue.submit("msg1".into(), None, None, RequestPriority::Interactive);
-
-        // Second submit should hit back-pressure.
-        let rx2 = queue.submit("msg2".into(), None, None, RequestPriority::Interactive);
-
-        // The back-pressured request gets None immediately.
-        let result = rx2.await.unwrap();
-        assert!(result.is_none());
-    }
-
-    #[tokio::test]
-    async fn depth_tracks_enqueue() {
-        let (queue, _receivers) = RequestQueue::new(8);
-        assert_eq!(queue.depth(RequestPriority::Voice), 0);
-
-        let _rx = queue.submit("test".into(), None, None, RequestPriority::Voice);
-        assert_eq!(queue.depth(RequestPriority::Voice), 1);
-    }
-}

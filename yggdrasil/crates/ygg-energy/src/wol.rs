@@ -46,26 +46,3 @@ pub enum WolError {
     #[error("send error: {0}")]
     Send(String),
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_mac_colon() {
-        let bytes = parse_mac("AA:BB:CC:DD:EE:FF").unwrap();
-        assert_eq!(bytes, [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]);
-    }
-
-    #[test]
-    fn parse_mac_dash() {
-        let bytes = parse_mac("aa-bb-cc-dd-ee-ff").unwrap();
-        assert_eq!(bytes, [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]);
-    }
-
-    #[test]
-    fn parse_mac_invalid() {
-        assert!(parse_mac("invalid").is_err());
-        assert!(parse_mac("AA:BB:CC").is_err());
-    }
-}

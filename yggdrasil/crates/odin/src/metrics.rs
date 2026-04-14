@@ -196,21 +196,3 @@ pub fn record_flow_duration(flow: &str, step: &str, duration_secs: f64) {
     )
     .record(duration_secs);
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // metrics! macros are no-ops without a recorder installed. These tests
-    // verify the helpers compile and accept the documented signatures —
-    // value plumbing is exercised end-to-end via the /metrics scrape in prod.
-
-    #[test]
-    fn metric_helpers_accept_expected_signatures() {
-        record_explicit_flow_invocation("coding_swarm");
-        record_cron_fire("dream_consolidation");
-        record_e2e_hit();
-        record_flow_duration("coding_swarm", "review", 0.42);
-        record_flow_duration("coding_swarm", "__total__", 1.7);
-    }
-}

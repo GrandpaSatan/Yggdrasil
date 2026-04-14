@@ -1,0 +1,40 @@
+[project]
+name = "yggdrasil-tests-e2e"
+version = "0.66.0"
+description = "End-to-end functional tests for the Yggdrasil fleet (Sprint 066)."
+requires-python = ">=3.10"
+
+dependencies = [
+    "pytest>=8.0",
+    "pytest-timeout>=2.3",
+    "requests>=2.32",
+    "tenacity>=9.0",
+    "websockets>=13.0",
+    "python-dotenv>=1.0",
+    "jsonschema>=4.23",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+
+# Default timeout: individual test caps at 30s. Sprint-end hook overrides via --timeout=30 too.
+timeout = 30
+
+# Markers — see conftest.py for enforcement logic.
+markers = [
+    "destructive: test performs a real side-effect (VM launch, SSH deploy, HA actuation). Requires E2E_DESTRUCTIVE=1 AND no E2E_HOOK_CONTEXT.",
+    "slow: test takes >10s or burns rate-limit budget; excluded from sprint-end runs.",
+    "required_services(*names): skip module if any listed service fails /health.",
+    "audit_xfail(vuln_id): placeholder for audit-finding xfail wrapping. Use @pytest.mark.xfail(reason='VULN-xxx', strict=True) in practice.",
+]
+
+# Disable cache to keep runs deterministic.
+addopts = "-ra --strict-markers -p no:cacheprovider"
+
+# Log capture — live output on failure, not on success.
+log_cli = false
+log_cli_level = "INFO"
+log_cli_format = "%(asctime)s %(levelname)-5s %(name)s: %(message)s"

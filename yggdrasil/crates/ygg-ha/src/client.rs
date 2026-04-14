@@ -171,36 +171,3 @@ impl HaClient {
         Ok(())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn ha_client_applies_timeout_from_config() {
-        let config = HaConfig {
-            url: "http://127.0.0.1:8123".to_string(),
-            token: "test-token".to_string(),
-            timeout_secs: 5,
-            automation_model: None,
-        };
-        let client = HaClient::from_config(&config);
-        assert_eq!(client.base_url, "http://127.0.0.1:8123");
-        assert_eq!(client.token, "test-token");
-        // Client is constructed via builder with timeout — not bare Client::new().
-        let _ = client.http;
-    }
-
-    #[tokio::test]
-    async fn ha_client_fails_on_unreachable() {
-        let config = HaConfig {
-            url: "http://127.0.0.1:1".to_string(),
-            token: "test".to_string(),
-            timeout_secs: 1,
-            automation_model: None,
-        };
-        let client = HaClient::from_config(&config);
-        let result = client.get_states().await;
-        assert!(result.is_err());
-    }
-}

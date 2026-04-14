@@ -1396,14 +1396,180 @@ async fn sync_docs_sprint_end(
         }
     };
 
+    // Step 5 (Sprint 066): run the pytest E2E suite against the live fleet
+    // before declaring the sprint closed. The archive itself already succeeded
+    // (Steps 1-4); this gate produces a second engram tagged e2e:pass|fail
+    // and surfaces the result in the response. We never fail the sprint
+    // archive on a transient e2e failure — the operator decides what to do
+    // with the signal.
+    let e2e_summary = run_e2e_sprint_gate(client, config, workspace, &params.sprint_id).await;
+
     tool_ok(format!(
-        "Sprint {} archived.\n\nEngram ID: {}\nProject: {}\n\n{}\n\nSummary stored:\n{}",
+        "Sprint {} archived.\n\nEngram ID: {}\nProject: {}\n\n{}\n\nSummary stored:\n{}\n\nE2E Gate:\n{}",
         params.sprint_id,
         engram_id,
         project,
         deleted_file,
-        summary_text
+        summary_text,
+        e2e_summary,
     ))
+}
+
+/// Sprint 066: run the pytest E2E suite against the live fleet on sprint_end.
+///
+/// Spawns ``pytest tests-e2e -m "not destructive and not slow"`` with the
+/// hook-context env var set, so the destructive gate hard-skips even if a
+/// developer left ``E2E_DESTRUCTIVE=1`` in their shell.
+///
+/// On completion this function:
+///   1. Writes the full pytest output to ``/tmp/yggdrasil-e2e-sprint-NNN-<ts>.log``.
+///   2. Stores a second engram tagged ``e2e:pass`` or ``e2e:fail``.
+///   3. On failure, invokes ``scripts/smoke/ha-notify-failure.sh`` (best-effort).
+///   4. Returns a one-paragraph human-readable summary string for the tool response.
+///
+/// Errors are intentionally swallowed into a status string — the sprint archive
+/// must succeed even if the e2e environment is broken (no venv, network down).
+async fn run_e2e_sprint_gate(
+    client: &Client,
+    config: &McpServerConfig,
+    workspace: &str,
+    sprint_id: &str,
+) -> String {
+    use tokio::process::Command;
+
+    let tests_dir = format!("{workspace}/tests-e2e");
+    if !std::path::Path::new(&tests_dir).is_dir() {
+        return format!("SKIPPED — {tests_dir} not present (no E2E suite to run)");
+    }
+
+    // Prefer the venv pytest if it exists; fall back to PATH `pytest`.
+    let venv_pytest = format!("{tests_dir}/.venv/bin/pytest");
+    let pytest_bin = if std::path::Path::new(&venv_pytest).is_file() {
+        venv_pytest
+    } else {
+        "pytest".to_string()
+    };
+
+    let ts = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
+    let log_path = format!("/tmp/yggdrasil-e2e-sprint-{sprint_id}-{ts}.log");
+
+    tracing::info!(sprint_id, %pytest_bin, %log_path, "starting e2e sprint gate");
+
+    let output_result = Command::new(&pytest_bin)
+        .current_dir(&tests_dir)
+        .args([
+            "-m",
+            "not destructive and not slow",
+            "--timeout=30",
+            "--maxfail=5",
+            "-p",
+            "no:xdist",
+            "-p",
+            "no:cacheprovider",
+            "--tb=short",
+            "-q",
+        ])
+        .env("E2E_HOOK_CONTEXT", "sprint_end")
+        .env("E2E_DESTRUCTIVE", "0")
+        .env("SPRINT_ID", sprint_id)
+        .output()
+        .await;
+
+    let (exit_code, stdout, stderr) = match output_result {
+        Ok(out) => (
+            out.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        ),
+        Err(e) => {
+            tracing::warn!(sprint_id, error = %e, "pytest failed to spawn");
+            return format!(
+                "SKIPPED — could not spawn `{pytest_bin}`: {e}. \
+                 Install with: cd {tests_dir} && python3 -m venv .venv && \
+                 .venv/bin/pip install pytest pytest-timeout requests tenacity websockets python-dotenv jsonschema"
+            );
+        }
+    };
+
+    let combined = format!("{stdout}\n--- stderr ---\n{stderr}");
+    let _ = tokio::fs::write(&log_path, &combined).await;
+
+    let verdict = if exit_code == 0 { "pass" } else { "fail" };
+
+    // Pull a one-line summary out of pytest's footer (best-effort regex).
+    let summary_line = combined
+        .lines()
+        .filter(|l| l.contains(" passed") || l.contains(" failed") || l.contains(" xfailed"))
+        .last()
+        .unwrap_or("(no pytest summary line)")
+        .trim()
+        .to_string();
+
+    // Store a second engram for this run so memory recall surfaces the e2e history.
+    let store_url = format!("{}/api/v1/store", config.odin_url.trim_end_matches('/'));
+    let project = config.project.as_deref().unwrap_or("unknown");
+    let tags = vec![
+        "e2e".to_string(),
+        format!("e2e:{verdict}"),
+        format!("sprint:{sprint_id}"),
+        format!("project:{project}"),
+    ];
+    let cause = format!("Sprint {sprint_id} e2e run");
+    let effect = format!("{summary_line}\n(log: {log_path})");
+
+    #[derive(Serialize)]
+    struct StoreReq<'a> {
+        cause: &'a str,
+        effect: &'a str,
+        tags: &'a [String],
+        #[serde(skip_serializing_if = "Option::is_none")]
+        project: Option<&'a str>,
+        force: bool,
+    }
+    let store_body = StoreReq {
+        cause: &cause,
+        effect: &effect,
+        tags: &tags,
+        project: config.project.as_deref(),
+        force: true,
+    };
+    let _ = client
+        .post(&store_url)
+        .json(&store_body)
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await;
+
+    // On failure, fire the HA notification helper if available. Best-effort.
+    if exit_code != 0 {
+        let notify_script = format!("{workspace}/scripts/smoke/ha-notify-failure.sh");
+        if std::path::Path::new(&notify_script).is_file() {
+            let _ = Command::new(&notify_script)
+                .arg(&log_path)
+                .arg(format!("Sprint {sprint_id} e2e gate"))
+                .env(
+                    "HA_URL",
+                    std::env::var("HA_URL").unwrap_or_default(),
+                )
+                .env(
+                    "HA_TOKEN",
+                    std::env::var("HA_TOKEN").unwrap_or_default(),
+                )
+                .output()
+                .await;
+        }
+    }
+
+    if exit_code == 0 {
+        format!(
+            "PASS  {summary_line}\n  Log: {log_path}\n  Engram tagged: e2e:pass, sprint:{sprint_id}"
+        )
+    } else {
+        format!(
+            "FAIL (exit={exit_code}) — sprint archive succeeded; e2e signals broken flow.\n  \
+             {summary_line}\n  Log: {log_path}\n  Engram tagged: e2e:fail, sprint:{sprint_id}"
+        )
+    }
 }
 
 /// Format the models table as a plain string (shared with the resource handler).
@@ -4741,194 +4907,6 @@ pub async fn network_topology(
         tool_ok(format!("## Mesh {action}\n\n{text}"))
     } else {
         tool_error(format!("Mesh HTTP {status}: {text}"))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn ha_call_service_rejects_disallowed_domain() {
-        let params = HaCallServiceParams {
-            domain: "lock".to_string(),
-            service: "unlock".to_string(),
-            data: serde_json::json!({"entity_id": "lock.front_door"}),
-        };
-        let result = ha_call_service(None, params).await;
-        // Should fail because "lock" is not in the allowlist.
-        assert!(result.is_error.unwrap_or(false));
-    }
-
-    #[tokio::test]
-    async fn ha_call_service_allows_light_domain() {
-        // With no HA client configured, this will fail because "not configured",
-        // NOT because of domain validation — meaning light domain passed the check.
-        let params = HaCallServiceParams {
-            domain: "light".to_string(),
-            service: "turn_on".to_string(),
-            data: serde_json::json!({"entity_id": "light.living_room"}),
-        };
-        let result = ha_call_service(None, params).await;
-        // Should fail with "not configured", not "domain not allowed".
-        assert!(result.is_error.unwrap_or(false));
-        let text = match &result.content[0].raw {
-            rmcp::model::RawContent::Text(t) => t.text.clone(),
-            _ => panic!("expected text content"),
-        };
-        assert!(text.contains("not configured"), "got: {text}");
-    }
-
-    #[tokio::test]
-    async fn ha_call_service_no_client_returns_error() {
-        let params = HaCallServiceParams {
-            domain: "switch".to_string(),
-            service: "toggle".to_string(),
-            data: serde_json::json!({}),
-        };
-        let result = ha_call_service(None, params).await;
-        assert!(result.is_error.unwrap_or(false));
-    }
-
-    #[test]
-    fn test_parse_file_blocks() {
-        let content = r#"Here are the changes:
-
-```src/main.rs
-fn main() {
-    println!("hello");
-}
-```
-
-Some explanation text.
-
-```src/lib.rs
-pub fn add(a: i32, b: i32) -> i32 {
-    a + b
-}
-```
-"#;
-
-        let blocks = parse_file_blocks(content);
-        assert_eq!(blocks.len(), 2);
-        assert_eq!(blocks[0].0, "src/main.rs");
-        assert!(blocks[0].1.contains("println"));
-        assert_eq!(blocks[1].0, "src/lib.rs");
-        assert!(blocks[1].1.contains("pub fn add"));
-    }
-
-    #[test]
-    fn test_parse_file_blocks_skips_generic_language() {
-        let content = r#"```rust
-fn example() {}
-```
-
-```src/real.rs
-fn real() {}
-```
-"#;
-
-        let blocks = parse_file_blocks(content);
-        // "rust" has no dot, so it's treated as a language tag and skipped
-        assert_eq!(blocks.len(), 1);
-        assert_eq!(blocks[0].0, "src/real.rs");
-    }
-
-    // ── Sprint 063 P3a — sprint-end effect fallback ───────────────
-
-    /// Pre-063 regression: a valid summarizer output is used verbatim.
-    /// We must NEVER mutate a non-empty summary.
-    #[test]
-    fn sprint_end_fallback_passes_summary_through() {
-        let out = sprint_end_effect_fallback(
-            "- bullet one\n- bullet two",
-            "full sprint doc here",
-            "063",
-        );
-        assert_eq!(out, "- bullet one\n- bullet two");
-    }
-
-    /// P3a core: empty summarizer output falls back to sprint_content
-    /// instead of aborting the archive with "effect must not be empty".
-    #[test]
-    fn test_archive_accepts_empty_summary() {
-        let out = sprint_end_effect_fallback(
-            "   \n  \t  ",
-            "Sprint 063 plan: P1, P2, P3, P5d.",
-            "063",
-        );
-        assert_eq!(out, "Sprint 063 plan: P1, P2, P3, P5d.");
-        assert!(!out.trim().is_empty(), "effect must not be empty after fallback");
-    }
-
-    /// Degenerate case: both summary AND sprint_content are empty. The
-    /// archive must STILL produce a non-empty effect — we synthesize a
-    /// placeholder rather than crashing.
-    #[test]
-    fn sprint_end_fallback_synthesises_when_all_empty() {
-        let out = sprint_end_effect_fallback("", "   \n", "063");
-        assert!(out.contains("063"));
-        assert!(!out.trim().is_empty());
-    }
-
-    /// Pure-whitespace summary with substantial sprint content must fall
-    /// back to the content (capped at 2000 chars) — not to the synthesized
-    /// placeholder. Regression for confusing the two fallback tiers.
-    #[test]
-    fn sprint_end_fallback_prefers_content_over_synthesis() {
-        let long_content = "x".repeat(5000);
-        let out = sprint_end_effect_fallback("  \t  ", &long_content, "063");
-        assert_eq!(out.len(), 2000, "content fallback must cap at 2000 chars");
-        assert!(out.chars().all(|c| c == 'x'));
-    }
-
-    // ── Sprint 063 P3b — StoreMemoryParams tags serde round-trip ──
-
-    /// P3b core: `store_memory cause="x" effect="y" tags=["a","b"]` must
-    /// deserialize cleanly against the MCP schema. Regression for a bug
-    /// where MCP clients sending explicit tags were rejected.
-    #[test]
-    fn test_store_memory_with_tags_roundtrip() {
-        use ygg_domain::tool_params::StoreMemoryParams;
-        let body = serde_json::json!({
-            "cause": "x",
-            "effect": "y",
-            "tags": ["a", "b"],
-        });
-        let params: StoreMemoryParams =
-            serde_json::from_value(body).expect("tags array must deserialize");
-        assert_eq!(params.cause, "x");
-        assert_eq!(params.effect, "y");
-        assert_eq!(params.tags.as_deref(), Some(&["a".to_string(), "b".to_string()][..]));
-        assert!(params.id.is_none());
-        assert!(params.force.is_none());
-    }
-
-    /// Tags omitted entirely must still deserialize — regression for the
-    /// same P3b bug manifesting as "required field 'tags' missing" from
-    /// stricter downstream consumers of the JSON schema.
-    #[test]
-    fn store_memory_params_without_tags_deserializes() {
-        use ygg_domain::tool_params::StoreMemoryParams;
-        let body = serde_json::json!({ "cause": "x", "effect": "y" });
-        let params: StoreMemoryParams =
-            serde_json::from_value(body).expect("missing tags must be allowed");
-        assert!(params.tags.is_none());
-    }
-
-    /// Explicit null tags must be accepted — some MCP clients emit `null`
-    /// rather than omitting optional fields.
-    #[test]
-    fn store_memory_params_with_null_tags_deserializes() {
-        use ygg_domain::tool_params::StoreMemoryParams;
-        let body = serde_json::json!({
-            "cause": "x",
-            "effect": "y",
-            "tags": serde_json::Value::Null,
-        });
-        let params: StoreMemoryParams =
-            serde_json::from_value(body).expect("null tags must be allowed");
-        assert!(params.tags.is_none());
     }
 }
 

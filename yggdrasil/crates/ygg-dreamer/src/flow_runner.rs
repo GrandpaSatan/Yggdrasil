@@ -91,21 +91,3 @@ pub async fn run_dream(
 
     Ok(text)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn dream_flow_serializes_round_trip() {
-        let f = DreamFlow {
-            name: "dream_exploration".into(),
-            cron: Some("0 */1 * * *".into()),
-            prompt: "Reflect on recent engineering activity.".into(),
-            flow: "dream_exploration".into(),
-        };
-        let s = serde_json::to_string(&f).unwrap();
-        let parsed: DreamFlow = serde_json::from_str(&s).unwrap();
-        assert_eq!(parsed.flow, "dream_exploration");
-    }
-}

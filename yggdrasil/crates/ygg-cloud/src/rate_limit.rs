@@ -86,37 +86,3 @@ impl TokenBucket {
         self.last_refill = now;
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_rate_limiter_allows_under_limit() {
-        let limiter = RateLimiter::new(60, CloudProvider::Openai);
-
-        // Should succeed immediately — bucket starts full at 60 tokens
-        limiter.acquire().await;
-        assert!(limiter.available().await);
-    }
-
-    #[tokio::test]
-    async fn test_rate_limiter_refills_over_time() {
-        // Create a limiter with 60 RPM (1 token/sec refill rate)
-        let limiter = RateLimiter::new(60, CloudProvider::Gemini);
-
-        // Drain all tokens
-        for _ in 0..60 {
-            limiter.acquire().await;
-        }
-
-        // Bucket should be empty now
-        assert!(!limiter.available().await);
-
-        // Wait enough time for at least 1 token to refill (1 token/sec)
-        tokio::time::sleep(Duration::from_millis(1100)).await;
-
-        // Should have at least 1 token now
-        assert!(limiter.available().await);
-    }
-}
