@@ -58,7 +58,7 @@ echo
 echo "3. Odin /internal/activity (ygg-dreamer dependency)"
 activity=$(curl -s --max-time 5 "$ODIN_URL/internal/activity" 2>/dev/null)
 idle=$(echo "$activity" | jq -r '.idle_secs // -1' 2>/dev/null)
-if [ "$idle" = "-1" ]; then
+if [ -z "$idle" ] || [ "$idle" = "-1" ] || [ "$idle" = "null" ]; then
     echo "  FAIL /internal/activity endpoint missing (Odin not rebuilt with Sprint 065 binary?)"
     fail=$((fail+1))
 else
