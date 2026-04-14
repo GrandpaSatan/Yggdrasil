@@ -1,0 +1,51 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      // Sprint 066 — invoked when you click the bug icon next to a test in the
+      // Testing sidebar. The `purpose: ["debug-test"]` array is the VS Code
+      // contract that wires this config to Test Explorer's debug button.
+      "name": "Pytest: Debug current test",
+      "type": "debugpy",
+      "request": "launch",
+      "purpose": ["debug-test"],
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "cwd": "${workspaceFolder}/tests-e2e",
+      "env": {
+        // Disable pytest-cov breakpoints if it ever ends up installed.
+        "PYTEST_ADDOPTS": "--no-cov",
+        // Keep the destructive gates closed during debug runs by default.
+        "E2E_DESTRUCTIVE": "0"
+      }
+    },
+    {
+      // Manual full-suite run with the sprint-end profile (matches what the
+      // sync_docs_tool sprint_end hook executes). Useful for reproducing
+      // exactly what the daily timer would see.
+      "name": "Pytest: sprint-end profile (no destructive, no slow)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}/tests-e2e",
+      "args": [
+        "-m",
+        "not destructive and not slow",
+        "--timeout=30",
+        "--maxfail=5",
+        "-p",
+        "no:xdist",
+        "-p",
+        "no:cacheprovider",
+        "--tb=short",
+        "-v"
+      ],
+      "env": {
+        "E2E_HOOK_CONTEXT": "sprint_end",
+        "E2E_DESTRUCTIVE": "0"
+      },
+      "justMyCode": false
+    }
+  ]
+}

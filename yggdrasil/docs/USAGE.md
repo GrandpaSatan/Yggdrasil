@@ -529,6 +529,7 @@ cd ~/yggdrasil
    - Archives to Mimir with tags `["sprint", "project:yggdrasil"]`
    - Appends architecture delta to ARCHITECTURE.md
    - Deletes the sprint file
+   - **Sprint 066:** Spawns `pytest tests-e2e -m "not destructive and not slow"` against the live fleet, stores a second engram tagged `e2e:pass|fail`, and on failure pings HA mobile via `scripts/smoke/ha-notify-failure.sh`. The archive succeeds even if the gate fails — the operator decides whether to retry.
 2. Verify `/sprints/` is empty (ready for next sprint).
 
 ### Retrieving sprint history
@@ -775,6 +776,89 @@ Restore from password-manager backup OR reseed all secrets from source systems:
    ```
 3. If the key is truly unrecoverable: delete the drop-in, restart mimir with a fresh key,
    and reseed all secrets manually via the `set` action above.
+
+---
+
+## Testing — End-to-End Suite (Sprint 066)
+
+The single source of truth for testing. Sprint 066 deleted the prior
+mock-based unit/integration tier (~6,000 LOC, mostly `MockOllama`/`MockMimir`
+style harnesses) and replaced it with one pytest suite that hits the live
+fleet. ~92 pure-algorithm unit tests remain in-crate (novelty classifier,
+SDR math, vault crypto, store_gate JSON parser, RAG fusion).
+
+### One-time setup (workstation)
+
+```bash
+cd yggdrasil/tests-e2e
+python3 -m venv .venv
+.venv/bin/pip install pytest pytest-timeout requests tenacity websockets python-dotenv jsonschema
+cp .env.test.example .env.test
+chmod 600 .env.test
+# Edit .env.test — at minimum set MIMIR_VAULT_CLIENT_TOKEN if you want vault tests.
+```
+
+### Running
+
+```bash
+cd yggdrasil/tests-e2e
+.venv/bin/pytest                            # full suite, serial, default
+.venv/bin/pytest -m "not destructive and not slow"   # sprint-end profile (default in CI)
+.venv/bin/pytest tests/test_memory.py -v   # one file
+.venv/bin/pytest -k "recall_roundtrip"     # one test by substring
+```
+
+### VS Code Test Explorer
+
+`.vscode/settings.json` registers pytest as the discovery provider. With the
+Python extension installed, every test appears in the Testing sidebar
+(beaker icon) — click ▶ to run, click 🐞 to debug. The interpreter must be
+set to `tests-e2e/.venv/bin/python`.
+
+Cargo (Rust algo) tests appear in the same sidebar via rust-analyzer.
+
+### Markers and gates
+
+- `@pytest.mark.required_services("odin", "mimir")` — module skips if any
+  named service fails its `/health` probe. Use this on every test that hits
+  a real service so partial fleet outages produce skips instead of failures.
+- `@pytest.mark.slow` — excluded from sprint-end and cron runs.
+- `@pytest.mark.destructive` — VM launches, real SSH deploys, real HA
+  actuation. Three independent gates must open to actually run one:
+  1. The marker selector (default excludes destructive).
+  2. `E2E_HOOK_CONTEXT` env var **absent** (the sprint-end and cron paths
+     set this to `sprint_end`/`cron` and conftest hard-skips destructive
+     tests regardless of CLI flags).
+  3. `E2E_DESTRUCTIVE=1` env var set, AND the test body's
+     `require_destructive` fixture runs.
+  Only a developer typing `E2E_DESTRUCTIVE=1 pytest -m destructive` from a
+  fresh shell can fire one.
+
+### Audit-finding xfails
+
+`tests/test_security.py` plus a few in `test_memory.py`/`test_mesh.py`/
+`test_webhook.py` carry `@pytest.mark.xfail(reason="VULN-NNN", strict=True)`
+markers that flip to a strict failure (XPASS) the moment the corresponding
+remediation lands — forcing the maintainer to remove the xfail and convert
+the test to a live regression guard. This is the executable form of the
+audit's remediation roadmap.
+
+### Concurrency
+
+Default is **serial**. The conftest refuses `-n N` (xdist) unless
+`E2E_PARALLEL_OK=1` is also set, and a `/tmp/yggdrasil-e2e.lock` file
+serializes parallel pytest *processes* against the same fleet. Live Mimir's
+store_gate LFM2.5 queue is serial (~200ms/gate) and the Postgres pool caps
+at 16, so unconstrained parallel hammering produces 429s and DB contention
+that look like test failures.
+
+### Daily timer
+
+`yggdrasil-e2e-daily.timer` invokes `scripts/smoke/e2e-cron-wrapper.sh` at
+04:00 UTC. The wrapper runs the same pytest command the sprint-end hook
+runs, captures the log to `/var/log/yggdrasil/e2e-<ts>.log`, and on
+non-zero exit pings HA mobile via the shared `ha-notify-failure.sh` helper.
+The unit always exits 0 — the HA notification IS the user-facing signal.
 
 ---
 

@@ -1,0 +1,48 @@
+{
+  // ── Python interpreter & pytest discovery (Sprint 066) ─────────────────
+  // Pinning pytestPath to the venv binary means VS Code doesn't depend on
+  // the user-selected interpreter — Test Explorer works the moment the
+  // workspace opens, no "select interpreter" prompt required.
+  "python.defaultInterpreterPath": "${workspaceFolder}/tests-e2e/.venv/bin/python",
+  "python.testing.pytestEnabled": true,
+  "python.testing.unittestEnabled": false,
+  "python.testing.pytestPath": "${workspaceFolder}/tests-e2e/.venv/bin/pytest",
+  "python.testing.cwd": "${workspaceFolder}/tests-e2e",
+  "python.testing.pytestArgs": [
+    // Base path is implied by `cwd` above — pytest reads pyproject.toml
+    // and discovers `tests/` automatically. Adding flags here would override
+    // the defaults in pyproject.toml, so keep this list empty.
+  ],
+  "python.testing.autoTestDiscoverOnSaveEnabled": true,
+  "python.testing.autoTestDiscoverOnSavePattern": "**/test_*.py",
+
+  // Inlay hints for pytest fixture parameter types (e.g., `mimir_client: MimirClient`).
+  "python.analysis.inlayHints.pytestParameters": true,
+
+  // Resolve `helpers.*` imports during static analysis (Pylance).
+  "python.analysis.extraPaths": ["${workspaceFolder}/tests-e2e"],
+
+  // Load fleet URLs + vault token without requiring the user to source manually.
+  "python.envFile": "${workspaceFolder}/tests-e2e/.env.test",
+
+  // ── Rust workspace ──────────────────────────────────────────────────────
+  "rust-analyzer.check.command": "clippy",
+  "rust-analyzer.cargo.features": "all",
+
+  // ── Workspace tidiness ─────────────────────────────────────────────────
+  "files.exclude": {
+    "**/__pycache__": true,
+    "**/.pytest_cache": true,
+    "**/target": true,
+    "**/.venv": true
+  },
+  "files.watcherExclude": {
+    "**/target/**": true,
+    "**/.venv/**": true,
+    "**/.pytest_cache/**": true
+  },
+
+  // ── Test Explorer behavior ─────────────────────────────────────────────
+  "testing.automaticallyOpenTestResults": "neverOpen",
+  "testing.openTesting": "neverOpen"
+}

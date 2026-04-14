@@ -204,3 +204,73 @@ Design principles added:
 - "Stop tuning timeouts to measured p95" — give AI calls 3–10× observed p95; rely on streaming/progress UX for "I'm working" feedback, not tight cutoffs
 - All flows ALWAYS stream via SSE; JSON response is a server-side convenience for stream=false clients, not a parallel code path
 - OpenAI compatibility preserved — `event: ygg_step` frames are invisible to compliant clients
+
+## Sprint 066 Changes — Test Strategy Overhaul
+
+Replaced the entire mock-driven Rust test tier (~6,000 LOC across 4 integration
+files, the `ygg-test-harness` crate, and 47 inline `mod tests` blocks) with a
+single pytest end-to-end suite that exercises the live fleet via real HTTP.
+
+### New testing topology
+
+```
+yggdrasil/
+├── tests-e2e/           # pytest, VS Code Test Explorer, sprint-end gated
+│   ├── pyproject.toml   # markers, default 30s timeout, serial execution
+│   ├── conftest.py      # fixtures + 3 destructive gates + lockfile
+│   ├── helpers/         # OdinClient, MimirClient, MuninnClient, McpHttpClient
+│   ├── tests/test_*.py  # 55 user-flow tests + audit gates
+│   └── .env.test        # gitignored; chmod 600 enforced by conftest
+└── crates/<crate>/src/  # 92 pure-algorithm tests remain (novelty, SDR,
+                         #   vault crypto, store_gate JSON, RAG fusion)
+```
+
+### Removed crates / files
+- `crates/ygg-test-harness/` — entire crate deleted (workspace member removed,
+  dev-dependency dropped from `crates/odin/Cargo.toml`).
+- `crates/odin/tests/` — 4 mock-based integration files deleted.
+- `scripts/smoke/{e2e-live,flows-smoke,flows-bench}.sh|py` — assertions
+  ported into pytest.
+- `scripts/ops/voice-e2e-test.sh` — ported into `tests/test_activity.py`
+  + `tests/test_voice.py`.
+
+### New service-side hook
+`sync_docs_tool(event="sprint_end")` now spawns
+`pytest tests-e2e -m "not destructive and not slow"` after archiving the
+sprint engram, stores a second engram tagged `e2e:pass|fail`, and on
+failure invokes `scripts/smoke/ha-notify-failure.sh` for HA mobile push.
+The archive succeeds independently of the gate result so a transient fleet
+hiccup never blocks sprint closure.
+
+### Three-gate destructive test policy
+A test that performs real side-effects (VM launch, SSH deploy, HA actuation)
+runs only when ALL three independent gates open simultaneously:
+1. Marker selector (`-m "not destructive"` — default for hooks).
+2. `E2E_HOOK_CONTEXT` env var **absent** (sprint_end and cron set this and
+   `conftest.py` hard-skips destructive tests regardless of CLI flags).
+3. `E2E_DESTRUCTIVE=1` env var present, AND the test body's
+   `require_destructive` fixture confirms it.
+
+### Audit-finding contract
+`tests/test_security.py` carries `@pytest.mark.xfail(reason="VULN-NNN", strict=True)`
+gates for VULN-001/002/004/005/013 + FLAW-008/009. When the corresponding
+remediation lands, the xfail flips XPASS strict and forces the maintainer
+to remove the marker — converting the test into a live regression guard.
+This is the executable form of the security audit's remediation roadmap.
+
+### Concurrency invariants
+Default execution is serial. `conftest.py` refuses pytest-xdist (`-n N`)
+unless `E2E_PARALLEL_OK=1` is also set, and a `/tmp/yggdrasil-e2e.lock`
+file serializes parallel pytest *processes* against the same fleet to
+respect Mimir's serial LFM2.5 store_gate queue (~200 ms/gate) and the
+Postgres pool cap (16 connections).
+
+### VS Code Test Explorer integration
+- `.vscode/settings.json` pins `python.testing.pytestPath` to the venv
+  binary so Test Explorer works on workspace open without an interpreter
+  prompt.
+- `.vscode/launch.json` provides `purpose: ["debug-test"]` (click-to-debug
+  on individual tests) and a sprint-end-profile launch config that
+  reproduces the hook's exact pytest command.
+- Rust algorithm tests (the 92-test keep-list) appear in the same Test
+  Explorer sidebar via rust-analyzer's adapter.

@@ -1,8 +1,11 @@
 # Rust build artifacts
 **/target/
 
-# IDE
-.vscode/
+# IDE — workspace .vscode/ is committed (Sprint 066: pytest Test Explorer
+# config + launch configs need to ship for every dev). Per-user overrides
+# go in settings.local.json or .code-workspace which stay ignored.
+**/.vscode/settings.local.json
+**/.vscode/*.code-workspace
 .idea/
 *.swp
 *.swo
