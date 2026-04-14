@@ -1,0 +1,18 @@
+[Unit]
+Description=Yggdrasil Ollama warm-up timer (Sprint 061)
+Documentation=Fires yggdrasil-ollama-warm.service at boot and every 30 minutes to keep swarm models resident + KV prefix caches populated.
+Requires=yggdrasil-ollama-warm.service
+
+[Timer]
+# First run 30s after boot (lets ollama.service settle).
+OnBootSec=30s
+# Then every 30 minutes, regardless of wall-clock time.
+OnUnitActiveSec=30min
+Unit=yggdrasil-ollama-warm.service
+Persistent=true
+# Add a small random jitter so multi-node warm-ups don't thunder the
+# shared /api/chat endpoint in lock-step.
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target
