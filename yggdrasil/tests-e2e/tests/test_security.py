@@ -324,10 +324,6 @@ def test_mesh_gate_default_policy_is_deny() -> None:
 
 # ──────────────────────── FLAW-008: Flow secrets in LLM prompt ──────────
 
-@pytest.mark.xfail(
-    reason="FLAW-008: resolved secret values are sent to the LLM in plaintext",
-    strict=True,
-)
 def test_flow_secrets_scrubbed_from_response() -> None:
     """After remediation, an LLM response must never echo a resolved secret value.
 

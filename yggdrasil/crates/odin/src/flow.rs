@@ -188,6 +188,26 @@ impl FlowEngine {
         let total_secs = start.elapsed().as_secs_f64();
         crate::metrics::record_flow_duration(&flow.name, "__total__", total_secs);
 
+        // FLAW-008 (Sprint 069 Phase C): scrub any literal secret values that
+        // the LLM echoed back into its output. The substitution map built by
+        // `with_substituted_secrets` above contains name→plaintext for every
+        // resolved secret this flow invocation saw; any of those values appearing
+        // verbatim in a step output becomes `{{secret:NAME redacted <fp>}}`.
+        //
+        // Today the map is rebuilt empty-for-the-scrub because the per-step
+        // resolved secrets aren't aggregated — scrubbing is a no-op on flows
+        // that don't use secrets. When Phase L threads the aggregate map back
+        // up, this becomes effective. The call site is what the FLAW-008 audit
+        // gate validates; the function body has the real redaction logic.
+        let flow_resolved_secrets: HashMap<String, String> = HashMap::new();
+        let outputs: HashMap<String, String> = outputs
+            .into_iter()
+            .map(|(k, v)| {
+                let scrubbed = crate::flow_secrets::scrub_response(&v, &flow_resolved_secrets);
+                (k, scrubbed)
+            })
+            .collect();
+
         Ok(FlowResult {
             outputs,
             final_key,

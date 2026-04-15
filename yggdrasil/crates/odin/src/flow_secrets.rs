@@ -100,6 +100,59 @@ pub fn substitute(input: &str, secrets: &HashMap<String, String>) -> String {
     out
 }
 
+/// FLAW-008 (Sprint 069 Phase C): scrub resolved secret values from an
+/// outbound LLM response / transcript / request log before we write it
+/// anywhere visible.
+///
+/// A secret's plaintext value can end up in:
+///   • the LLM's response content (if the model echoes back the prompt)
+///   • request transcripts persisted by `SessionStore::append_messages`
+///   • the `request_log` jsonl output
+///
+/// This function walks the response string and replaces EVERY exact
+/// occurrence of each resolved secret value with the token
+/// `{{secret:NAME redacted}}`. The 16-char prefix hash lets operators
+/// trace which secret fired without leaking the value itself.
+///
+/// Called from `chat_handler` after streaming finishes and from
+/// `SessionStore::append_messages` so both live transcripts AND the
+/// on-disk request log are scrubbed.
+pub fn scrub_response(response: &str, resolved_secrets: &HashMap<String, String>) -> String {
+    if resolved_secrets.is_empty() || response.is_empty() {
+        return response.to_owned();
+    }
+    // Sort longest-first to avoid partial-overlap collisions when one
+    // secret is a substring of another.
+    let mut pairs: Vec<(&String, &String)> = resolved_secrets.iter().collect();
+    pairs.sort_by_key(|(_, v)| std::cmp::Reverse(v.len()));
+
+    let mut out = response.to_owned();
+    for (name, value) in pairs {
+        if value.is_empty() || value.len() < 4 {
+            // Too-short values would false-positive on common tokens.
+            // Refuse to scrub them — caller should reject short secrets upstream.
+            continue;
+        }
+        // Precompute a short fingerprint for telemetry without leaking the value.
+        let fingerprint = {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            value.as_bytes().hash(&mut h);
+            format!("{:x}", h.finish())
+        };
+        let replacement = format!("{{{{secret:{name} redacted {}}}}}", &fingerprint[..8]);
+        if out.contains(value) {
+            out = out.replace(value, &replacement);
+            tracing::debug!(
+                secret = name,
+                fp = %&fingerprint[..8],
+                "scrubbed secret value from LLM response (FLAW-008)"
+            );
+        }
+    }
+    out
+}
+
 #[derive(Debug, Serialize)]
 struct VaultRequest<'a> {
     action: &'a str,
