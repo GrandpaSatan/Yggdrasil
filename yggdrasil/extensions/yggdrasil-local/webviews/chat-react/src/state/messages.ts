@@ -24,6 +24,8 @@ export interface ChatMsg {
   role: "user" | "assistant" | "system";
   content: string;
   ts?: number;
+  /** Swarm steps observed during this assistant turn (populated by `swarmEvent` frames). */
+  swarmSteps?: SwarmEvent[];
 }
 
 export interface SwarmEvent {

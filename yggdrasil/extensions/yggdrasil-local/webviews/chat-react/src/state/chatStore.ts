@@ -1,14 +1,26 @@
 /**
  * Zustand chat store — single source of truth for the webview.
  *
- * Phase 1 scaffolding: structure + reducers land here; full message rendering
- * is wired up in Phase 2. Intentionally no `models` or `currentModel` state —
- * Fergus is one persona, Odin intent-routes the backend.
+ * Phase 2 expansion: `swarmSteps` moved onto the last assistant message so
+ * folds travel with the thought they describe; `notificationCard` added for
+ * the self-improvement toast; `attachment` handling covers
+ * requestFilePicker → filePicked and host-side attachSelection/attachFile.
  */
 
 import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
 import type { ChatMsg, FlowSummary, SwarmEvent, ThreadSummary } from "./messages";
+
+export interface Attachment {
+  label: string;
+  content: string;
+  path?: string;
+}
+
+export interface NotificationCardState {
+  count: number;
+  summaryTitles: string[];
+}
 
 export interface ChatState {
   threads: ThreadSummary[];
@@ -16,9 +28,9 @@ export interface ChatState {
   messages: ChatMsg[];
   flows: FlowSummary[];
   streaming: boolean;
-  swarmSteps: SwarmEvent[];
-  attachments: Array<{ label: string; content: string; path?: string }>;
+  attachments: Attachment[];
   notice: string | null;
+  notificationCard: NotificationCardState | null;
 
   applyState(p: { threads: ThreadSummary[]; currentThreadId: string | null; flows: FlowSummary[] }): void;
   applyMessages(messages: ChatMsg[]): void;
@@ -28,9 +40,11 @@ export interface ChatState {
   endStream(failed?: boolean): void;
   streamError(error: string): void;
   setNotice(text: string | null): void;
-  addAttachment(a: { label: string; content: string; path?: string }): void;
+  addAttachment(a: Attachment): void;
   removeAttachment(label: string): void;
   clearAttachments(): void;
+  showNotificationCard(card: NotificationCardState): void;
+  clearNotificationCard(): void;
 }
 
 export const useChatStore = create<ChatState>()(
@@ -40,9 +54,9 @@ export const useChatStore = create<ChatState>()(
     messages: [],
     flows: [],
     streaming: false,
-    swarmSteps: [],
     attachments: [],
     notice: null,
+    notificationCard: null,
 
     applyState(p) {
       set((s) => {
@@ -54,16 +68,14 @@ export const useChatStore = create<ChatState>()(
 
     applyMessages(messages) {
       set((s) => {
-        s.messages = messages;
-        s.swarmSteps = [];
+        s.messages = messages.map((m) => ({ ...m, swarmSteps: m.swarmSteps ?? [] }));
       });
     },
 
     beginStream() {
       set((s) => {
         s.streaming = true;
-        s.swarmSteps = [];
-        s.messages.push({ role: "assistant", content: "" });
+        s.messages.push({ role: "assistant", content: "", swarmSteps: [] });
       });
     },
 
@@ -78,7 +90,10 @@ export const useChatStore = create<ChatState>()(
 
     handleSwarmEvent(ev) {
       set((s) => {
-        s.swarmSteps.push(ev);
+        const last = s.messages[s.messages.length - 1];
+        if (last && last.role === "assistant") {
+          last.swarmSteps = [...(last.swarmSteps ?? []), ev];
+        }
       });
     },
 
@@ -124,6 +139,18 @@ export const useChatStore = create<ChatState>()(
     clearAttachments() {
       set((s) => {
         s.attachments = [];
+      });
+    },
+
+    showNotificationCard(card) {
+      set((s) => {
+        s.notificationCard = card;
+      });
+    },
+
+    clearNotificationCard() {
+      set((s) => {
+        s.notificationCard = null;
       });
     },
   })),
