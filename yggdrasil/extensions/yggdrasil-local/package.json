@@ -145,6 +145,21 @@
         "icon": "$(symbol-structure)"
       },
       {
+        "command": "yggdrasil.flows.openSettings",
+        "title": "Yggdrasil: Open Flows Settings Panel",
+        "icon": "$(settings)"
+      },
+      {
+        "command": "yggdrasil.flows.editRoles",
+        "title": "Yggdrasil: Edit Flow Roles…",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "yggdrasil.flows.pinInChat",
+        "title": "Yggdrasil: Pin Flow in Chat",
+        "icon": "$(pin)"
+      },
+      {
         "command": "yggdrasil.refreshFlows",
         "title": "Yggdrasil: Refresh Flows",
         "icon": "$(refresh)"
@@ -275,6 +290,31 @@
         {
           "command": "yggdrasil.modelInfo",
           "when": "false"
+        },
+        {
+          "command": "yggdrasil.flows.editRoles",
+          "when": "false"
+        },
+        {
+          "command": "yggdrasil.flows.pinInChat",
+          "when": "false"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "yggdrasil.flows.pinInChat",
+          "when": "view == yggdrasil.flowsTree && viewItem == flow",
+          "group": "yggdrasil@1"
+        },
+        {
+          "command": "yggdrasil.flows.editRoles",
+          "when": "view == yggdrasil.flowsTree && viewItem == flow",
+          "group": "yggdrasil@2"
+        },
+        {
+          "command": "yggdrasil.flows.openSettings",
+          "when": "view == yggdrasil.flowsTree && viewItem == flow",
+          "group": "yggdrasil@3"
         }
       ]
     },
@@ -419,6 +459,12 @@
           "default": "",
           "editPresentation": "multilineText",
           "description": "Override Fergus's default system prompt. Empty uses the bundled Yggdrasil persona; any non-empty string replaces it verbatim for every chat turn."
+        },
+        "yggdrasil.flows.refreshIntervalSecs": {
+          "type": "number",
+          "default": 10,
+          "minimum": 2,
+          "description": "How often (seconds) the Flows sidebar polls Odin for updated flow definitions. Minimum 2s."
         },
         "yggdrasil.voice.enabled": {
           "type": "boolean",

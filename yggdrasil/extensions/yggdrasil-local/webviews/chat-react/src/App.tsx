@@ -38,6 +38,7 @@ export function App(): JSX.Element {
   const setNotice = useChatStore((s) => s.setNotice);
   const addAttachment = useChatStore((s) => s.addAttachment);
   const showNotificationCard = useChatStore((s) => s.showNotificationCard);
+  const setPendingSeed = useChatStore((s) => s.setPendingSeed);
 
   // Voice service — mounts voice-client.js when yggdrasil.voice.enabled is true.
   // Currently drives nothing visible; a VoiceButton consumer can hook
@@ -94,13 +95,22 @@ export function App(): JSX.Element {
             content: `// active editor: ${msg.filename} (${msg.language})`,
           });
           break;
-        case "seed":
-          // Seeded flow hint / prefilled text — Phase 3 wires the text into the
-          // ChatInput via a store field; for now just surface a notice.
+        case "seed": {
+          // Preload the ChatInput with `/<flowHint> ` (and/or free text).
+          // ChatInput consumes this via `consumePendingSeed()` on mount and
+          // whenever `pendingSeed` changes.
+          const parts: string[] = [];
+          if (msg.seed.flowHint) parts.push(`/${msg.seed.flowHint} `);
+          if (msg.seed.text) parts.push(msg.seed.text);
+          const text = parts.join("");
+          if (text.length > 0) {
+            setPendingSeed({ text, run: !!msg.seed.run });
+          }
           if (msg.seed.flowHint) {
             setNotice(`Pinned flow: /${msg.seed.flowHint}`);
           }
           break;
+        }
       }
     },
     [
@@ -114,6 +124,7 @@ export function App(): JSX.Element {
       setNotice,
       addAttachment,
       showNotificationCard,
+      setPendingSeed,
     ],
   );
 

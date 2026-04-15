@@ -42,6 +42,8 @@ export function ChatInput(): JSX.Element {
   const attachments = useChatStore((s) => s.attachments);
   const clearAttachments = useChatStore((s) => s.clearAttachments);
   const streaming = useChatStore((s) => s.streaming);
+  const pendingSeed = useChatStore((s) => s.pendingSeed);
+  const consumePendingSeed = useChatStore((s) => s.consumePendingSeed);
 
   const [text, setText] = useState("");
   const [slashOpen, setSlashOpen] = useState(false);
@@ -77,6 +79,26 @@ export function ChatInput(): JSX.Element {
       setSlashQuery("");
     }
   }, []);
+
+  // Consume a pending seed (from the host `seed` message) — e.g. the Flows
+  // tree's "Pin in Chat" preloads `/coding_swarm ` here and focuses the
+  // textarea. Defined AFTER `detectSlash` so the effect can call it.
+  // Intentionally does NOT auto-submit even if `seed.run` is true — the
+  // user reviews + hits Enter to send.
+  useEffect(() => {
+    if (!pendingSeed) return;
+    const seed = consumePendingSeed();
+    if (!seed) return;
+    setText(seed.text);
+    detectSlash(seed.text);
+    setTimeout(() => {
+      const el = taRef.current;
+      if (el) {
+        el.focus();
+        el.setSelectionRange(seed.text.length, seed.text.length);
+      }
+    }, 0);
+  }, [pendingSeed, consumePendingSeed, detectSlash]);
 
   const onChange = (e: ChangeEvent<HTMLTextAreaElement>) => {
     const value = e.target.value;

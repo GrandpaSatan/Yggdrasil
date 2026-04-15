@@ -17,6 +17,7 @@ import { HookManager } from "./hookManager";
 import { AutoUpdater } from "./autoUpdater";
 import { FlowsPanel } from "./views/flowsPanel";
 import { FlowsTreeProvider } from "./views/flowsTreeProvider";
+import { editFlowRoles } from "./views/editFlowRolesQuickPick";
 import { ModelsTreeProvider } from "./views/modelsTreeProvider";
 import { SettingsPanel } from "./views/settingsPanel";
 import { ChatPanel } from "./views/chatPanel";
@@ -96,7 +97,7 @@ export async function activate(context: vscode.ExtensionContext) {
   const chatHistory = new ChatHistory(context);
 
   // Sidebar trees
-  const flowsTree = new FlowsTreeProvider();
+  const flowsTree = new FlowsTreeProvider(odin);
   const modelsTree = new ModelsTreeProvider(odin);
   const repoTree = new RepoTreeProvider();
   const vaultPanelProvider = new VaultPanelProvider(context.extensionUri);
@@ -108,7 +109,8 @@ export async function activate(context: vscode.ExtensionContext) {
       VaultPanelProvider.viewType,
       vaultPanelProvider,
     ),
-    modelsTree
+    flowsTree,
+    modelsTree,
   );
 
   // Editor context-menu actions (explain selection, edit with model, ask about file)
@@ -129,10 +131,43 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     ),
 
+    // Sprint 068 Phase 4: new alias for the "open full editor" path. The
+    // Architecture leaves in the Flows tree route here; the editRoles
+    // QuickPick's "Open full editor" option also dispatches this.
+    vscode.commands.registerCommand(
+      "yggdrasil.flows.openSettings",
+      (flowId?: string) => {
+        FlowsPanel.createOrShow(context, flowId);
+      },
+    ),
+
     vscode.commands.registerCommand("yggdrasil.refreshFlows", () => {
       flowsTree.refresh();
       vscode.window.showInformationMessage("Yggdrasil flows refreshed.");
     }),
+
+    // Sprint 068 Phase 4: two-level QuickPick — step → model → PUT. The
+    // happy path is: click a flow in the sidebar → pick a step → pick a
+    // model → toast → tree refreshes with the new model in the tooltip.
+    vscode.commands.registerCommand(
+      "yggdrasil.flows.editRoles",
+      async (flowName?: string) => {
+        if (!flowName) {
+          vscode.window.showWarningMessage("Yggdrasil: no flow selected.");
+          return;
+        }
+        await editFlowRoles(odin, flowsTree, flowName);
+      },
+    ),
+
+    vscode.commands.registerCommand(
+      "yggdrasil.flows.pinInChat",
+      (flowName?: string) => {
+        if (!flowName) return;
+        const panel = ChatPanel.show(context, odin, chatHistory);
+        panel.seedFlowPin(flowName);
+      },
+    ),
 
     vscode.commands.registerCommand("yggdrasil.openSettings", () => {
       SettingsPanel.createOrShow(context, odin, hookManager);

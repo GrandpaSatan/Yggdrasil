@@ -22,6 +22,11 @@ export interface NotificationCardState {
   summaryTitles: string[];
 }
 
+export interface PendingSeed {
+  text: string;
+  run: boolean;
+}
+
 export interface ChatState {
   threads: ThreadSummary[];
   currentThreadId: string | null;
@@ -31,6 +36,11 @@ export interface ChatState {
   attachments: Attachment[];
   notice: string | null;
   notificationCard: NotificationCardState | null;
+  /**
+   * One-shot input preload. Set by the host `seed` message; consumed by
+   * ChatInput on mount/change which calls `consumePendingSeed()` to clear.
+   */
+  pendingSeed: PendingSeed | null;
 
   applyState(p: { threads: ThreadSummary[]; currentThreadId: string | null; flows: FlowSummary[] }): void;
   applyMessages(messages: ChatMsg[]): void;
@@ -45,6 +55,8 @@ export interface ChatState {
   clearAttachments(): void;
   showNotificationCard(card: NotificationCardState): void;
   clearNotificationCard(): void;
+  setPendingSeed(seed: PendingSeed | null): void;
+  consumePendingSeed(): PendingSeed | null;
 }
 
 export const useChatStore = create<ChatState>()(
@@ -57,6 +69,7 @@ export const useChatStore = create<ChatState>()(
     attachments: [],
     notice: null,
     notificationCard: null,
+    pendingSeed: null,
 
     applyState(p) {
       set((s) => {
@@ -152,6 +165,22 @@ export const useChatStore = create<ChatState>()(
       set((s) => {
         s.notificationCard = null;
       });
+    },
+
+    setPendingSeed(seed) {
+      set((s) => {
+        s.pendingSeed = seed;
+      });
+    },
+
+    consumePendingSeed() {
+      // Immer's draft lets us read+clear atomically in one `set` call.
+      let taken: PendingSeed | null = null;
+      set((s) => {
+        taken = s.pendingSeed;
+        s.pendingSeed = null;
+      });
+      return taken;
     },
   })),
 );

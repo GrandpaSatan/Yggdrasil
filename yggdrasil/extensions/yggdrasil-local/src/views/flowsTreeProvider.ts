@@ -1,136 +1,238 @@
 /**
- * Flows TreeView provider — renders the flows list in the activity-bar sidebar.
+ * Flows TreeView provider — live list of Odin flows with auto-refresh.
  *
- * Tree structure:
- *   Architecture
- *     Topology
- *     AI Distribution
- *   Coding Flows
- *     coding_swarm, code_qa, code_docs, devops, ui_design, dba, full_stack
- *   Existing Flows
- *     research, perceive, saga_classify_distill, home_assistant, complex_reasoning, dream_*
+ * Sprint 068 Phase 4 rewrite: replaces the hardcoded GROUPS table with a
+ * `setInterval` poll against `OdinClient.listFlows()`. Flows are bucketed
+ * by name prefix (coding_*, memory_*, ha_*, research_*, voice_*, else
+ * Other) under a live heading; a tiny static "Architecture" heading is
+ * pinned at the top as a convenience jump into the full-width
+ * SettingsPanel.
  *
- * Clicking a leaf runs the `yggdrasil.openFlows` command with the flow id,
- * which opens the full-width FlowsPanel focused on that tab.
+ * Click behaviour: a leaf opens the `yggdrasil.flows.editRoles` QuickPick
+ * (step → model reassignment, two-level picker). Context-menu adds
+ * "Pin in Chat" which preloads `/<flow-name> ` in the chat input.
+ *
+ * Resilience: on Odin outage, the last successful snapshot is rendered
+ * with a dimmed "stale" badge so the sidebar never disappears.
  */
 
 import * as vscode from "vscode";
+import { OdinClient, type Flow } from "../api/odinClient";
 
-type FlowStatus = "new" | "live" | "empty" | "partial" | "architecture";
+export type FlowNode =
+  | { kind: "group"; label: string; isStatic: boolean; children: string[] }
+  | { kind: "leaf"; flowName: string; stale: boolean };
 
-interface FlowLeaf {
-  id: string;
-  label: string;
-  status: FlowStatus;
-  tooltip: string;
+const DEFAULT_REFRESH_SECS = 10;
+const MIN_REFRESH_SECS = 2;
+
+/**
+ * Classify a flow name into a user-facing bucket. Deterministic and
+ * pure — exported so unit tests can assert the mapping.
+ */
+export function bucketForFlow(name: string): string {
+  const lower = name.toLowerCase();
+  if (lower.startsWith("coding_") || lower.includes("code_")) return "Coding";
+  if (lower.startsWith("memory_") || lower.includes("dream_") || lower.includes("saga"))
+    return "Memory";
+  if (lower.startsWith("ha_") || lower.includes("home_assistant")) return "Home Assistant";
+  if (lower.startsWith("research") || lower.includes("perceive")) return "Research";
+  if (lower.startsWith("voice_") || lower.includes("transcribe")) return "Voice";
+  return "Other";
 }
 
-interface FlowGroup {
-  label: string;
-  children: FlowLeaf[];
-}
-
-const GROUPS: FlowGroup[] = [
-  {
-    label: "Architecture",
-    children: [
-      { id: "overview", label: "Topology", status: "architecture", tooltip: "Three-node fleet overview — Hugin, Munin, Morrigan" },
-      { id: "distribution", label: "AI Distribution", status: "architecture", tooltip: "Live map of models loaded per host" },
-    ],
-  },
-  {
-    label: "Coding Flows",
-    children: [
-      { id: "coding_swarm", label: "coding_swarm", status: "new", tooltip: "Cross-model generate → review → refine with LGTM loop" },
-      { id: "code_qa", label: "code_qa", status: "new", tooltip: "Test generation with coverage analysis" },
-      { id: "code_docs", label: "code_docs", status: "new", tooltip: "Docs with accuracy cross-check" },
-      { id: "devops", label: "devops", status: "new", tooltip: "Infra config with safety review" },
-      { id: "ui_design", label: "ui_design", status: "new", tooltip: "Frontend components with visual review loop" },
-      { id: "dba", label: "dba", status: "new", tooltip: "Schema migrations with safety review" },
-      { id: "full_stack", label: "full_stack", status: "partial", tooltip: "Meta-flow — orchestrates 4 others" },
-    ],
-  },
-  {
-    label: "Existing Flows",
-    children: [
-      { id: "research", label: "research", status: "live", tooltip: "7-step research pipeline (Sprint 056)" },
-      { id: "perceive", label: "perceive", status: "live", tooltip: "Voice + vision understanding (Sprint 057)" },
-      { id: "saga", label: "saga_classify_distill", status: "live", tooltip: "Memory classification + engram extraction" },
-      { id: "home_assistant", label: "home_assistant", status: "empty", tooltip: "HA device control — needs model reassignment" },
-      { id: "complex_reasoning", label: "complex_reasoning", status: "new", tooltip: "Fast plan → deep verify (Sprint 059)" },
-      { id: "dream", label: "dream_* flows", status: "empty", tooltip: "Memory consolidation / exploration — empty" },
-    ],
-  },
+/**
+ * Pinned "Architecture" leaves — these are NOT flows Odin dispatches;
+ * they're convenience jumps into the full SettingsPanel tabs. Kept at the
+ * top for discoverability of the deeper config UI.
+ */
+const ARCHITECTURE_LEAVES = [
+  { label: "Topology", id: "__arch_topology__", tooltip: "Open full SettingsPanel — fleet + network" },
+  { label: "AI Distribution", id: "__arch_distribution__", tooltip: "Open full SettingsPanel — model fleet" },
 ];
 
-type TreeNode = { kind: "group"; group: FlowGroup } | { kind: "leaf"; leaf: FlowLeaf };
-
-export class FlowsTreeProvider implements vscode.TreeDataProvider<TreeNode> {
-  private _onDidChangeTreeData = new vscode.EventEmitter<TreeNode | undefined>();
+export class FlowsTreeProvider implements vscode.TreeDataProvider<FlowNode>, vscode.Disposable {
+  private _onDidChangeTreeData = new vscode.EventEmitter<FlowNode | undefined>();
   readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
+  private cache: Flow[] = [];
+  private cacheStale = false;
+  private timer: NodeJS.Timeout | undefined;
+  private configSub: vscode.Disposable | undefined;
+
+  constructor(private odin: OdinClient) {
+    // Kick off an immediate fetch so the tree isn't empty on activation.
+    // Ignore the returned promise — on failure `cacheStale` flips and
+    // subsequent polls retry.
+    void this.fetch();
+    this.startTimer();
+
+    this.configSub = vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration("yggdrasil.flows.refreshIntervalSecs")) {
+        this.startTimer();
+      }
+    });
+  }
+
+  dispose(): void {
+    if (this.timer) clearInterval(this.timer);
+    this.configSub?.dispose();
+    this._onDidChangeTreeData.dispose();
+  }
+
   refresh(): void {
+    void this.fetch();
+  }
+
+  private startTimer(): void {
+    if (this.timer) clearInterval(this.timer);
+    const cfg = vscode.workspace.getConfiguration("yggdrasil.flows");
+    const raw = cfg.get<number>("refreshIntervalSecs", DEFAULT_REFRESH_SECS);
+    const secs = Math.max(MIN_REFRESH_SECS, Math.floor(raw));
+    this.timer = setInterval(() => void this.fetch(), secs * 1000);
+  }
+
+  private async fetch(): Promise<void> {
+    try {
+      const flows = await this.odin.listFlows();
+      this.cache = flows;
+      this.cacheStale = false;
+    } catch {
+      // Keep the last-known cache; mark stale so the UI can dim it.
+      this.cacheStale = this.cache.length > 0;
+    }
     this._onDidChangeTreeData.fire(undefined);
   }
 
-  getTreeItem(node: TreeNode): vscode.TreeItem {
+  /**
+   * Look up a cached flow by name — used by the editRoles QuickPick to
+   * avoid a second round-trip when the tree already knows the shape.
+   */
+  getCached(name: string): Flow | undefined {
+    return this.cache.find((f) => f.name === name);
+  }
+
+  getTreeItem(node: FlowNode): vscode.TreeItem {
     if (node.kind === "group") {
-      const item = new vscode.TreeItem(node.group.label, vscode.TreeItemCollapsibleState.Expanded);
-      item.contextValue = "flowGroup";
-      item.iconPath = new vscode.ThemeIcon("folder");
+      const item = new vscode.TreeItem(node.label, vscode.TreeItemCollapsibleState.Expanded);
+      item.contextValue = node.isStatic ? "flowGroupStatic" : "flowGroup";
+      item.iconPath = new vscode.ThemeIcon(node.isStatic ? "symbol-structure" : "folder");
+      item.description = node.isStatic ? "" : `${node.children.length}`;
       return item;
     }
 
-    const item = new vscode.TreeItem(node.leaf.label, vscode.TreeItemCollapsibleState.None);
-    item.tooltip = node.leaf.tooltip;
+    // Architecture convenience leaves — route to the full SettingsPanel.
+    const arch = ARCHITECTURE_LEAVES.find((l) => l.id === node.flowName);
+    if (arch) {
+      const item = new vscode.TreeItem(arch.label, vscode.TreeItemCollapsibleState.None);
+      item.tooltip = arch.tooltip;
+      item.iconPath = new vscode.ThemeIcon("symbol-structure");
+      item.contextValue = "flowArchitecture";
+      item.command = {
+        command: "yggdrasil.flows.openSettings",
+        title: "Open Settings Panel",
+      };
+      return item;
+    }
+
+    // Real Odin flow.
+    const flow = this.cache.find((f) => f.name === node.flowName);
+    const item = new vscode.TreeItem(node.flowName, vscode.TreeItemCollapsibleState.None);
     item.contextValue = "flow";
-    item.iconPath = iconForStatus(node.leaf.status);
-    item.description = descriptionForStatus(node.leaf.status);
+    item.iconPath = iconForTrigger(flow?.trigger);
+    item.description = node.stale
+      ? "stale"
+      : flow?.steps
+        ? `${flow.steps.length} step${flow.steps.length === 1 ? "" : "s"}`
+        : "";
+    item.tooltip = buildTooltip(flow);
     item.command = {
-      command: "yggdrasil.openFlows",
-      title: "Open Flows",
-      arguments: [node.leaf.id],
+      command: "yggdrasil.flows.editRoles",
+      title: "Edit roles",
+      arguments: [node.flowName],
     };
     return item;
   }
 
-  getChildren(node?: TreeNode): TreeNode[] {
+  getChildren(node?: FlowNode): FlowNode[] {
     if (!node) {
-      return GROUPS.map((group) => ({ kind: "group", group }));
+      const groups: FlowNode[] = [];
+
+      // Architecture (static, always top).
+      groups.push({
+        kind: "group",
+        label: "Architecture",
+        isStatic: true,
+        children: ARCHITECTURE_LEAVES.map((l) => l.id),
+      });
+
+      // Live flow groups by prefix.
+      if (this.cache.length === 0 && !this.cacheStale) {
+        // No data and no cache yet — render a single placeholder bucket.
+        groups.push({ kind: "group", label: "Loading…", isStatic: false, children: [] });
+        return groups;
+      }
+
+      const buckets = new Map<string, string[]>();
+      for (const f of this.cache) {
+        const b = bucketForFlow(f.name);
+        const list = buckets.get(b) ?? [];
+        list.push(f.name);
+        buckets.set(b, list);
+      }
+      const order = ["Coding", "Memory", "Home Assistant", "Research", "Voice", "Other"];
+      for (const label of order) {
+        const names = buckets.get(label);
+        if (!names || names.length === 0) continue;
+        groups.push({
+          kind: "group",
+          label,
+          isStatic: false,
+          children: names.sort(),
+        });
+      }
+      return groups;
     }
+
     if (node.kind === "group") {
-      return node.group.children.map((leaf) => ({ kind: "leaf", leaf }));
+      return node.children.map((flowName) => ({
+        kind: "leaf" as const,
+        flowName,
+        stale: this.cacheStale,
+      }));
     }
     return [];
   }
 }
 
-function iconForStatus(status: FlowStatus): vscode.ThemeIcon {
-  switch (status) {
-    case "live":
-      return new vscode.ThemeIcon("pass-filled", new vscode.ThemeColor("testing.iconPassed"));
-    case "new":
-      return new vscode.ThemeIcon("sparkle", new vscode.ThemeColor("charts.blue"));
-    case "empty":
-      return new vscode.ThemeIcon("circle-slash", new vscode.ThemeColor("charts.red"));
-    case "partial":
-      return new vscode.ThemeIcon("circle-large-outline", new vscode.ThemeColor("charts.yellow"));
-    case "architecture":
-      return new vscode.ThemeIcon("symbol-structure");
+function iconForTrigger(trigger: unknown): vscode.ThemeIcon {
+  if (trigger === null || trigger === undefined || typeof trigger !== "object") {
+    return new vscode.ThemeIcon("circle-outline");
   }
+  const keys = Object.keys(trigger as Record<string, unknown>);
+  if (keys.includes("Manual")) return new vscode.ThemeIcon("play", new vscode.ThemeColor("charts.blue"));
+  if (keys.includes("Intent")) return new vscode.ThemeIcon("sparkle", new vscode.ThemeColor("charts.purple"));
+  if (keys.includes("Cron")) return new vscode.ThemeIcon("clock", new vscode.ThemeColor("charts.orange"));
+  return new vscode.ThemeIcon("circle-outline");
 }
 
-function descriptionForStatus(status: FlowStatus): string {
-  switch (status) {
-    case "live":
-      return "live";
-    case "new":
-      return "new";
-    case "empty":
-      return "empty";
-    case "partial":
-      return "meta";
-    default:
-      return "";
+function buildTooltip(flow: Flow | undefined): vscode.MarkdownString | undefined {
+  if (!flow) return undefined;
+  const md = new vscode.MarkdownString("", true);
+  md.isTrusted = false;
+  md.appendMarkdown(`**${flow.name}**\n\n`);
+  if (flow.trigger) {
+    const keys = Object.keys(flow.trigger as Record<string, unknown>);
+    md.appendMarkdown(`Trigger: \`${keys.join(", ") || "unknown"}\`\n\n`);
   }
+  const steps = flow.steps ?? [];
+  if (steps.length > 0) {
+    md.appendMarkdown(`Steps (${steps.length}):\n\n`);
+    for (const s of steps.slice(0, 8)) {
+      const modelLabel = s.model ?? "(default)";
+      md.appendMarkdown(`- \`${s.name}\` · ${modelLabel}\n`);
+    }
+    if (steps.length > 8) md.appendMarkdown(`\n… +${steps.length - 8} more\n`);
+  }
+  return md;
 }

@@ -472,6 +472,20 @@ export class ChatPanel {
     this.panel.webview.postMessage({ type: "activeEditor", ...info });
   }
 
+  /**
+   * Sprint 068 Phase 4: preload `/<flowName> ` in the chat input without
+   * running anything. Called from the Flows tree's "Pin in Chat" context
+   * menu. `run: false` signals the webview to fill the input and focus it
+   * but NOT auto-submit — the user types their message and hits Enter.
+   */
+  seedFlowPin(flowName: string): void {
+    this.panel.reveal(vscode.ViewColumn.Beside);
+    this.panel.webview.postMessage({
+      type: "seed",
+      seed: { flowHint: flowName, run: false },
+    });
+  }
+
   private getHtml(): string {
     const extUri = this.context.extensionUri;
     const mediaRoot = vscode.Uri.joinPath(extUri, "media");
