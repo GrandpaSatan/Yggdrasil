@@ -84,8 +84,19 @@ async fn main() -> anyhow::Result<()> {
     // The 120-second timeout applies to the entire request/response cycle.
     // RAG calls use their own per-call timeouts (3s via tokio::time::timeout),
     // so the client-level timeout only gates very long Ollama inference runs.
+    // Sprint 069 Phase C: every outbound call from Odin is internal
+    // infrastructure (Mimir, Muninn, Ollama backends, dreamer). Mark them
+    // so downstream BearerAuthLayer middleware bypasses token checks.
+    // Odin is already authenticating the INBOUND request; the outbound
+    // proxy layer is the infrastructure boundary.
+    let mut default_headers = reqwest::header::HeaderMap::new();
+    default_headers.insert(
+        "X-Yggdrasil-Internal",
+        reqwest::header::HeaderValue::from_static("true"),
+    );
     let http_client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(300))
+        .default_headers(default_headers)
         .build()
         .context("failed to build reqwest client")?;
 

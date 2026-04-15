@@ -776,8 +776,19 @@ impl YggdrasilServer {
     /// A stable session UUID is generated for this instance and a background
     /// task is spawned to prefetch the active sprint context from Mimir.
     pub fn from_config(config: &McpServerConfig) -> Self {
+        // Sprint 069 Phase C: mark every MCP → Odin/Mimir call as internal
+        // so the VULN-001 BearerAuthLayer lets it through without a token.
+        // Alternative (not chosen here): pipe $MIMIR_VAULT_CLIENT_TOKEN as
+        // Authorization: Bearer. The internal header is the simpler contract
+        // — MCP server IS infrastructure; it's not a tenant.
+        let mut default_headers = reqwest::header::HeaderMap::new();
+        default_headers.insert(
+            "X-Yggdrasil-Internal",
+            reqwest::header::HeaderValue::from_static("true"),
+        );
         let client = Client::builder()
             .timeout(Duration::from_secs(config.timeout_secs))
+            .default_headers(default_headers)
             .build()
             .unwrap_or_else(|_| Client::new());
 

@@ -228,8 +228,15 @@ impl YggdrasilLocalServer {
     /// Only needs `odin_url` (for LLM generation in sync_docs scaffolding),
     /// `workspace_path`, `project`, and `timeout_secs`. HA config is ignored.
     pub fn from_config(config: &McpServerConfig) -> Self {
+        // Sprint 069 Phase C: same internal-header pattern as the HTTP server.
+        let mut default_headers = reqwest::header::HeaderMap::new();
+        default_headers.insert(
+            "X-Yggdrasil-Internal",
+            reqwest::header::HeaderValue::from_static("true"),
+        );
         let client = Client::builder()
             .timeout(Duration::from_secs(config.timeout_secs))
+            .default_headers(default_headers)
             .build()
             .unwrap_or_else(|_| Client::new());
 

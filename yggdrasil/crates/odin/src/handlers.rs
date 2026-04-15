@@ -2217,6 +2217,11 @@ async fn forward_to_mimir(
     let upstream = client
         .post(url)
         .header("content-type", "application/json")
+        // Sprint 069 Phase C: mark as internal so Mimir's BearerAuthLayer
+        // lets proxied calls through without a caller-supplied token.
+        // Odin is authenticating the outer request; the proxy layer is
+        // the infrastructure boundary.
+        .header("X-Yggdrasil-Internal", "true")
         .body(body)
         .send()
         .await
