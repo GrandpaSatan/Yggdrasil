@@ -131,6 +131,14 @@ pub struct SessionStore {
 
 impl SessionStore {
     pub fn new(config: SessionConfig) -> Self {
+        // VULN-013 (Sprint 069 Phase C): pre-register session_evictions_total so
+        // it appears in /metrics before the first eviction fires. Without this,
+        // Prometheus scrapes against a freshly-booted Odin would miss the counter
+        // and the VULN-013 audit gate would still fail — even though the counter
+        // IS wired correctly in evict_if_full / reap_expired.
+        metrics::counter!("session_evictions_total", "reason" => "ttl").absolute(0);
+        metrics::counter!("session_evictions_total", "reason" => "lru_capacity").absolute(0);
+
         Self {
             sessions: Arc::new(DashMap::new()),
             project_sessions: Arc::new(DashMap::new()),

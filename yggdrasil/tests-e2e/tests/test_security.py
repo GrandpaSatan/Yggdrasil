@@ -244,10 +244,6 @@ def test_deploy_sudo_password_is_vault_reference_type() -> None:
 
 # ──────────────────────── VULN-004: Proxmox TLS validation disabled ──────
 
-@pytest.mark.xfail(
-    reason="VULN-004: ProxmoxClient uses .danger_accept_invalid_certs(true)",
-    strict=True,
-)
 def test_proxmox_client_does_not_disable_tls_validation() -> None:
     """grep the entire crates/ tree for ``danger_accept_invalid_certs(true)``.
 
@@ -273,10 +269,6 @@ def test_proxmox_client_does_not_disable_tls_validation() -> None:
 
 # ──────────────────────── VULN-005: HA call_service domain bypass ─────────
 
-@pytest.mark.xfail(
-    reason="VULN-005: HaClient::call_service accepts any (domain, service) pair",
-    strict=True,
-)
 def test_ha_client_call_service_validates_domain_allowlist() -> None:
     """The HaClient::call_service signature must take an allowlist parameter.
 
@@ -303,10 +295,6 @@ def test_ha_client_call_service_validates_domain_allowlist() -> None:
 
 # ──────────────────────── VULN-013: CONTEXT_STORE unbounded growth ───────
 
-@pytest.mark.xfail(
-    reason="VULN-013: Odin session store has no TTL/LRU eviction",
-    strict=True,
-)
 def test_odin_session_store_eviction_metric_present() -> None:
     """After eviction lands, /metrics must expose at least one ``session_evictions_total``-style counter."""
     _require_service_or_fail("odin")
@@ -319,10 +307,6 @@ def test_odin_session_store_eviction_metric_present() -> None:
 
 # ──────────────────────── FLAW-009: Mesh gate default-allow ─────────────
 
-@pytest.mark.xfail(
-    reason="FLAW-009: GateConfig::default() returns GatePolicy::Allow",
-    strict=True,
-)
 def test_mesh_gate_default_policy_is_deny() -> None:
     """Source-level check: the default policy must be Deny (fail-closed).
 

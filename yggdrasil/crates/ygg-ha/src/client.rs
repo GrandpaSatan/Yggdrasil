@@ -169,7 +169,7 @@ impl HaClient {
 
     /// Call an HA service (e.g., turn on a light).
     ///
-    /// Sprint 069 Phase C (VULN-005): `allowed_domains` restricts the set of
+    /// Sprint 069 Phase C (VULN-005): `allow_list` restricts the set of
     /// domains this call will dispatch to. Callers supply either
     /// `HaClient::DEFAULT_ALLOWED_DOMAINS` for the stock permit-list or their
     /// own curated slice for privileged code paths. A mismatched domain
@@ -179,9 +179,9 @@ impl HaClient {
         domain: &str,
         service: &str,
         data: serde_json::Value,
-        allowed_domains: &[&str],
+        allow_list: &[&str],
     ) -> Result<(), HaError> {
-        if !allowed_domains.iter().any(|d| d.eq_ignore_ascii_case(domain)) {
+        if !allow_list.iter().any(|d| d.eq_ignore_ascii_case(domain)) {
             return Err(HaError::DomainNotAllowed {
                 domain: domain.to_string(),
             });
