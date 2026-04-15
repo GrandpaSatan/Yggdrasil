@@ -32,6 +32,9 @@ pub async fn run_dream(
     let resp = client
         .post(&chat_url)
         .timeout(Duration::from_secs(300))
+        // Sprint 068 Phase 6a: tag internal traffic so Odin's busy counter
+        // excludes dream-flow runs from user-facing in-flight counts.
+        .header("X-Yggdrasil-Internal", "true")
         .json(&body)
         .send()
         .await

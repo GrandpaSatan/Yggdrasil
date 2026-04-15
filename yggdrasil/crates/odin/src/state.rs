@@ -276,6 +276,14 @@ pub struct AppState {
     pub activity_tracker: crate::flow_scheduler::ActivityTracker,
     /// Per-camera notification cooldown tracker (Sprint 057).
     pub camera_cooldown: Arc<crate::camera::CooldownTracker>,
+    /// In-flight user-facing chat counter per backend (Sprint 068 Phase 6a).
+    ///
+    /// Incremented by `BackendActiveGuard` at dispatch, decremented on
+    /// `Drop`. Skips internal dreamer traffic (requests carrying the
+    /// `X-Yggdrasil-Internal: true` header). Surfaced via
+    /// `GET /api/backends/busy` for the VS Code extension's Models tree
+    /// live status.
+    pub active_chats: Arc<DashMap<String, AtomicU32>>,
 }
 
 impl AppState {

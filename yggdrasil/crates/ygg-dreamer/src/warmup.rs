@@ -34,6 +34,9 @@ pub async fn fire_one(
     let resp = client
         .post(&url)
         .timeout(Duration::from_secs(120))
+        // Sprint 068 Phase 6a: tag internal traffic so Odin's busy counter
+        // excludes warmup probes from user-facing in-flight counts.
+        .header("X-Yggdrasil-Internal", "true")
         .json(&body)
         .send()
         .await

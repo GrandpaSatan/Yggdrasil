@@ -10,8 +10,9 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::RwLock;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::{Json, Router, routing::get};
 use clap::Parser;
@@ -33,6 +34,22 @@ struct DreamerState {
     idle_secs: AtomicU64,
     warmup_fires: AtomicU64,
     dream_fires: AtomicU64,
+    /// Sprint 068 Phase 6b: UNIX seconds of the most recent warmup/dream fire.
+    /// 0 when the daemon has not yet fired anything.
+    last_fire_ts: AtomicU64,
+    /// Sprint 068 Phase 6b: name of the dream flow currently being
+    /// dispatched. Set before `flow_runner::run_dream` and cleared after.
+    /// Whitelisted against `DreamerConfig.dream_flows[].name` at config
+    /// load so `/status` never leaks internal warmup prefix names.
+    active_flow: RwLock<Option<String>>,
+}
+
+/// Seconds since UNIX epoch — fallible-safe wrapper around SystemTime.
+fn unix_now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 #[tokio::main]
@@ -61,8 +78,13 @@ async fn main() -> anyhow::Result<()> {
 
     let state = Arc::new(DreamerState::default());
 
-    // --- Health server ---
+    // --- Health + status server ---
+    // /health is the pre-068 smoke-test endpoint (minimal payload, stable
+    // shape consumed by systemd + existing probes). /status is the
+    // Sprint 068 Phase 6b richer payload consumed by the VS Code extension's
+    // Models tree live-status poller.
     let health_state = state.clone();
+    let status_state = state.clone();
     let listen_addr = cfg.listen_addr.clone();
     let health_handle = tokio::spawn(async move {
         let app = Router::new()
@@ -77,6 +99,39 @@ async fn main() -> anyhow::Result<()> {
                             "idle_secs": s.idle_secs.load(Ordering::Relaxed),
                             "warmup_fires": s.warmup_fires.load(Ordering::Relaxed),
                             "dream_fires": s.dream_fires.load(Ordering::Relaxed),
+                        }))
+                    }
+                }),
+            )
+            .route(
+                "/status",
+                get(move || {
+                    let s = status_state.clone();
+                    async move {
+                        let last_fire_ts = s.last_fire_ts.load(Ordering::Relaxed);
+                        let idle_secs = s.idle_secs.load(Ordering::Relaxed);
+                        let now = unix_now_secs();
+                        // `active` = a fire happened within the last 60s AND
+                        // the daemon is currently inside an idle window
+                        // (idle_secs < 10 means we're actively dispatching
+                        // a dream flow rather than waiting for idle).
+                        let active = last_fire_ts > 0
+                            && now.saturating_sub(last_fire_ts) < 60
+                            && idle_secs < 10;
+                        let active_flow = s
+                            .active_flow
+                            .read()
+                            .ok()
+                            .and_then(|g| g.clone());
+                        Json(json!({
+                            "status": "ok",
+                            "service": "ygg-dreamer",
+                            "idle_secs": idle_secs,
+                            "warmup_fires": s.warmup_fires.load(Ordering::Relaxed),
+                            "dream_fires": s.dream_fires.load(Ordering::Relaxed),
+                            "active": active,
+                            "active_flow": active_flow,
+                            "last_fire_ts": last_fire_ts,
                         }))
                     }
                 }),
@@ -143,6 +198,10 @@ async fn main() -> anyhow::Result<()> {
                         Ok(()) => {
                             tracing::info!(prefix = %prefix.name, "warmup fired");
                             dream_state.warmup_fires.fetch_add(1, Ordering::Relaxed);
+                            // Sprint 068 Phase 6b: track recency for /status.
+                            dream_state
+                                .last_fire_ts
+                                .store(unix_now_secs(), Ordering::Relaxed);
                         }
                         Err(e) => {
                             tracing::warn!(prefix = %prefix.name, error = %e, "warmup failed");
@@ -154,15 +213,28 @@ async fn main() -> anyhow::Result<()> {
 
             // Dream flow pass — one per idle window, rotate through configured flows.
             for flow in &dream_flows {
-                match flow_runner::run_dream(
+                // Sprint 068 Phase 6b: publish the active flow name for
+                // /status. The name comes from user-owned config
+                // (DreamerConfig.dream_flows[].name), so no whitelist
+                // check is needed — it's already user-facing.
+                if let Ok(mut guard) = dream_state.active_flow.write() {
+                    *guard = Some(flow.name.clone());
+                }
+                let result = flow_runner::run_dream(
                     &dream_client,
                     &odin_url,
                     &mimir_url,
                     flow,
                     &sprint_tag,
                 )
-                .await
-                {
+                .await;
+                // Clear regardless of success/failure so /status doesn't
+                // get stuck reporting a stale active_flow after an error.
+                if let Ok(mut guard) = dream_state.active_flow.write() {
+                    *guard = None;
+                }
+
+                match result {
                     Ok(text) => {
                         tracing::info!(
                             flow = %flow.name,
@@ -170,6 +242,9 @@ async fn main() -> anyhow::Result<()> {
                             "dream flow completed, engram stored"
                         );
                         dream_state.dream_fires.fetch_add(1, Ordering::Relaxed);
+                        dream_state
+                            .last_fire_ts
+                            .store(unix_now_secs(), Ordering::Relaxed);
                     }
                     Err(e) => {
                         tracing::warn!(flow = %flow.name, error = %e, "dream flow failed");

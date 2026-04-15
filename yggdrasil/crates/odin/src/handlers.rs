@@ -11,6 +11,7 @@
 ///   - Only `rag` communicates with Muninn/Mimir for context.
 ///   - Transparent proxy handlers forward directly without involving `rag`.
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::{
@@ -265,22 +266,78 @@ pub async fn dispatch_flow_sse(
 // Helpers
 // ─────────────────────────────────────────────────────────────────
 
-/// RAII guard that decrements the backend active requests gauge on drop.
+/// RAII guard that decrements the backend active requests gauge on drop
+/// AND adjusts the Sprint 068 Phase 6a `active_chats` counter when the
+/// request is user-facing.
+///
+/// Internal traffic (ygg-dreamer warmup/dream runs, marked by the
+/// `X-Yggdrasil-Internal: true` header) bumps the Prometheus metric but
+/// is excluded from the UI-facing counter to keep the Models-tree
+/// "busy (N active)" badge an accurate read of user demand.
 struct BackendActiveGuard {
     backend: String,
+    /// Shared active-chats map — `Some` for user-facing requests so `Drop`
+    /// decrements the counter; `None` for internal traffic.
+    active_chats: Option<Arc<dashmap::DashMap<String, std::sync::atomic::AtomicU32>>>,
 }
 
 impl BackendActiveGuard {
-    fn new(backend: &str) -> Self {
+    fn new(
+        backend: &str,
+        active_chats: &Arc<dashmap::DashMap<String, std::sync::atomic::AtomicU32>>,
+        is_internal: bool,
+    ) -> Self {
         crate::metrics::adjust_backend_active(backend, 1.0);
-        Self { backend: backend.to_string() }
+        if !is_internal {
+            // Get-or-insert the AtomicU32 for this backend and bump it.
+            // DashMap.entry() holds a shard lock — we release it immediately
+            // after the fetch_add. Drop uses a fresh lookup, which is safe
+            // because entries are never removed.
+            let entry = active_chats
+                .entry(backend.to_string())
+                .or_insert_with(|| std::sync::atomic::AtomicU32::new(0));
+            entry
+                .value()
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        Self {
+            backend: backend.to_string(),
+            active_chats: if is_internal {
+                None
+            } else {
+                Some(active_chats.clone())
+            },
+        }
     }
 }
 
 impl Drop for BackendActiveGuard {
     fn drop(&mut self) {
         crate::metrics::adjust_backend_active(&self.backend, -1.0);
+        if let Some(map) = &self.active_chats {
+            if let Some(entry) = map.get(&self.backend) {
+                // Clamp at 0 defensively — under normal operation the
+                // increment in `new` always pairs 1:1 with this decrement.
+                let prev = entry.value().load(std::sync::atomic::Ordering::Relaxed);
+                if prev > 0 {
+                    entry
+                        .value()
+                        .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+        }
     }
+}
+
+/// Extract `true` from `X-Yggdrasil-Internal` if present in the headers.
+/// Used to exclude internal traffic (ygg-dreamer warmup/dream runs) from
+/// the user-facing in-flight counter.
+fn is_internal_request(headers: &axum::http::HeaderMap) -> bool {
+    headers
+        .get("x-yggdrasil-internal")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.eq_ignore_ascii_case("true") || s == "1")
+        .unwrap_or(false)
 }
 
 /// Hybrid SDR + LLM intent classification (Sprint 052).
@@ -809,7 +866,8 @@ pub async fn process_chat_text(
 
     // ── 4. Acquire semaphore (with fallback reroute) ──────────────
     let (backend_state, _permit) = acquire_with_fallback(state, &mut decision)?;
-    let _backend_guard = BackendActiveGuard::new(&decision.backend_name);
+    // Voice pipeline is always user-facing — no `X-Yggdrasil-Internal` path.
+    let _backend_guard = BackendActiveGuard::new(&decision.backend_name, &state.active_chats, false);
 
     // ── 5. Fetch RAG context ──────────────────────────────────────
     let span = tracing::info_span!("rag_fetch_voice");
@@ -1071,9 +1129,14 @@ pub async fn process_chat_text(
 ///  11. Update session with assistant response + fire-and-forget engram store.
 pub async fn chat_handler(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Json(request): Json<ChatCompletionRequest>,
 ) -> Result<Response, OdinError> {
     let e2e_start = std::time::Instant::now();
+    // Sprint 068 Phase 6a: internal traffic (ygg-dreamer) tags itself via
+    // `X-Yggdrasil-Internal: true` so its in-flight requests don't inflate
+    // the user-facing "busy (N active)" counter surfaced to the Models tree.
+    let is_internal = is_internal_request(&headers);
 
     // ── 1. Validate ──────────────────────────────────────────────
     if request.messages.is_empty() {
@@ -1296,7 +1359,11 @@ pub async fn chat_handler(
 
     // ── 7. Acquire semaphore (with fallback reroute) ─────────────
     let (backend_state, _permit) = acquire_with_fallback(&state, &mut decision)?;
-    let _backend_guard = BackendActiveGuard::new(&decision.backend_name);
+    let _backend_guard = BackendActiveGuard::new(
+        &decision.backend_name,
+        &state.active_chats,
+        is_internal,
+    );
 
     // ── 8. Fetch RAG context ─────────────────────────────────────
     let span = tracing::info_span!("rag_fetch");
@@ -1862,6 +1929,31 @@ pub struct HealthResponse {
     pub status: String,
     pub backends: HashMap<String, BackendHealth>,
     pub services: HashMap<String, String>,
+}
+
+/// `GET /api/backends/busy` — Sprint 068 Phase 6a.
+///
+/// Returns the current user-facing in-flight chat count per backend. The
+/// VS Code extension's Models tree polls this to surface "busy (N active)"
+/// status badges on the fleet view. Internal dreamer traffic (requests
+/// carrying `X-Yggdrasil-Internal: true`) is intentionally excluded so the
+/// counter reflects actual user demand.
+pub async fn backends_busy_handler(
+    State(state): State<AppState>,
+) -> Json<HashMap<String, u32>> {
+    // Include EVERY configured backend in the response even when its count
+    // is 0 — the extension treats missing keys as "no data" vs. "explicit
+    // zero". This keeps the Models tree's busy badge deterministic.
+    let mut out: HashMap<String, u32> = HashMap::new();
+    for backend in &state.backends {
+        let count = state
+            .active_chats
+            .get(&backend.name)
+            .map(|e| e.value().load(std::sync::atomic::Ordering::Relaxed))
+            .unwrap_or(0);
+        out.insert(backend.name.clone(), count);
+    }
+    Json(out)
 }
 
 /// Odin health check endpoint.

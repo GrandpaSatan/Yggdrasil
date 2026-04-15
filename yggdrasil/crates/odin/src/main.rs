@@ -352,6 +352,8 @@ async fn main() -> anyhow::Result<()> {
         camera_cooldown: Arc::new(odin::camera::CooldownTracker::new()),
         flows: flows_hot,
         config_path,
+        // Sprint 068 Phase 6a: per-backend in-flight chat counter.
+        active_chats: Arc::new(dashmap::DashMap::new()),
     };
 
     // ── Axum router ───────────────────────────────────────────────
@@ -364,6 +366,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/chat/completions", post(handlers::chat_handler))
         .route("/v1/agent/stream", post(handlers::agent_stream_handler))
         .route("/v1/models", get(handlers::models_handler))
+        // Sprint 068 Phase 6a: in-flight chat counter per backend.
+        .route("/api/backends/busy", get(handlers::backends_busy_handler))
         .route("/internal/activity", get(handlers::internal_activity))
         // Mimir transparent proxy endpoints (Fergus client compatibility).
         .route("/api/v1/query", post(handlers::proxy_query))
