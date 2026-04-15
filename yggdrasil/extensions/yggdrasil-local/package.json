@@ -466,6 +466,27 @@
           "minimum": 2,
           "description": "How often (seconds) the Flows sidebar polls Odin for updated flow definitions. Minimum 2s."
         },
+        "yggdrasil.models.refreshIntervalSecs": {
+          "type": "number",
+          "default": 15,
+          "minimum": 5,
+          "description": "How often (seconds) the Models sidebar polls backends for status (loaded / busy / dreaming). Minimum 5s."
+        },
+        "yggdrasil.models.dreamerUrl": {
+          "type": "string",
+          "default": "http://10.0.65.8:9097",
+          "description": "ygg-dreamer /status endpoint URL. Empty string disables the dreaming badge."
+        },
+        "yggdrasil.models.backendProbes": {
+          "type": "object",
+          "default": {
+            "munin": "http://10.0.65.8:11434",
+            "hugin": "http://10.0.65.9:11434",
+            "morrigan": "http://10.0.65.20:8080"
+          },
+          "additionalProperties": { "type": "string" },
+          "description": "Per-backend HTTP URLs for direct /api/ps probes (VRAM usage). Keys must match the `backend` name that Odin's /v1/models returns. Empty map falls back to the built-in Yggdrasil fleet defaults."
+        },
         "yggdrasil.voice.enabled": {
           "type": "boolean",
           "default": false,
