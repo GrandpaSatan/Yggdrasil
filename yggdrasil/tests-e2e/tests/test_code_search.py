@@ -2,8 +2,9 @@
 
 Response shape matches ``SearchResponse`` / ``SearchResult`` in
 crates/ygg-domain/src/chunk.rs: each result carries a nested ``chunk`` dict
-with ``file_path``, ``language`` (snake_case — "rust", "python"), ``content``.
-The ``MuninnClient.search`` helper returns the ``results`` array directly.
+with ``file_path``, ``language`` (single-word form — "rust", "typescript",
+"javascript", "python"), ``content``. The ``MuninnClient.search`` helper
+returns the ``results`` array directly.
 """
 
 from __future__ import annotations
@@ -63,13 +64,40 @@ def test_code_search_language_filter_respected(muninn_client: MuninnClient) -> N
         assert isinstance(r, dict), f"each result must be a dict; got {type(r).__name__}"
         chunk = r.get("chunk")
         assert isinstance(chunk, dict), f"result.chunk must be a dict; got {r!r}"
-        # ``Language`` serializes snake_case: "rust", "type_script", "java_script"...
+        # ``Language`` serializes to its conventional single-word form:
+        # "rust", "typescript", "javascript" (per-variant serde renames added
+        # Sprint 068 Phase 0). Historical "type_script"/"java_script" blobs
+        # still deserialize via alias, but new writes use the primary name.
         lang = chunk.get("language")
         assert isinstance(lang, str) and lang, (
             f"chunk.language must be a non-empty string; got {chunk!r}"
         )
         assert lang.lower() == "rust", (
             f"language filter violated — expected 'rust', got {lang!r}; chunk={chunk!r}"
+        )
+
+
+@pytest.mark.required_services("muninn")
+def test_code_search_accepts_typescript_language_filter(muninn_client: MuninnClient) -> None:
+    """Regression guard for Sprint 068 Phase 0.
+
+    Prior to the per-variant ``serde(rename)`` fix, ``Language::TypeScript``
+    serialized as ``"type_script"``, so callers passing ``languages=["typescript"]``
+    got an HTTP 422 ``unknown variant`` error. This test must hit Muninn with
+    the conventional single-word name and succeed (non-422). Index emptiness
+    for TypeScript is acceptable — we're asserting the *filter* parses, not
+    that corpus coverage exists.
+    """
+    # Does not raise — a 422 "unknown variant" would surface as a client
+    # exception via MuninnClient.search.
+    results = muninn_client.search("function", limit=5, languages=["typescript"])
+    assert isinstance(results, list), "search must return a list even for empty corpora"
+    for r in results:
+        chunk = r.get("chunk")
+        assert isinstance(chunk, dict), f"result.chunk must be a dict; got {r!r}"
+        lang = chunk.get("language", "")
+        assert lang == "typescript", (
+            f"typescript filter returned a non-typescript chunk: {lang!r}"
         )
 
 

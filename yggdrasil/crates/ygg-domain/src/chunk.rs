@@ -3,16 +3,29 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// Supported programming languages for code chunking.
+///
+/// Per-variant `serde(rename = ...)` overrides the default PascalCase mangling
+/// so compound-word variants serialize to their conventional single-word form
+/// (e.g. `TypeScript` → `"typescript"`, NOT `"type_script"`). The `alias`
+/// attributes keep historical `type_script`/`java_script` blobs in Mimir and
+/// request logs deserializable — no data migration required.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum Language {
+    #[serde(rename = "rust")]
     Rust,
+    #[serde(rename = "go")]
     Go,
+    #[serde(rename = "python")]
     Python,
+    #[serde(rename = "typescript", alias = "type_script")]
     TypeScript,
+    #[serde(rename = "javascript", alias = "java_script")]
     JavaScript,
+    #[serde(rename = "markdown")]
     Markdown,
+    #[serde(rename = "yaml")]
     Yaml,
+    #[serde(rename = "unknown")]
     Unknown,
 }
 
@@ -151,4 +164,48 @@ fn default_search_limit() -> usize {
 pub struct SearchResponse {
     pub results: Vec<SearchResult>,
     pub context: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn language_serializes_to_conventional_single_word_form() {
+        assert_eq!(serde_json::to_string(&Language::Rust).unwrap(), "\"rust\"");
+        assert_eq!(serde_json::to_string(&Language::TypeScript).unwrap(), "\"typescript\"");
+        assert_eq!(serde_json::to_string(&Language::JavaScript).unwrap(), "\"javascript\"");
+        assert_eq!(serde_json::to_string(&Language::Markdown).unwrap(), "\"markdown\"");
+    }
+
+    #[test]
+    fn language_deserializes_from_primary_names() {
+        assert_eq!(serde_json::from_str::<Language>("\"typescript\"").unwrap(), Language::TypeScript);
+        assert_eq!(serde_json::from_str::<Language>("\"javascript\"").unwrap(), Language::JavaScript);
+        assert_eq!(serde_json::from_str::<Language>("\"rust\"").unwrap(), Language::Rust);
+    }
+
+    #[test]
+    fn language_accepts_legacy_snake_case_aliases() {
+        assert_eq!(serde_json::from_str::<Language>("\"type_script\"").unwrap(), Language::TypeScript);
+        assert_eq!(serde_json::from_str::<Language>("\"java_script\"").unwrap(), Language::JavaScript);
+    }
+
+    #[test]
+    fn language_as_str_matches_serialized_form() {
+        for lang in [
+            Language::Rust,
+            Language::Go,
+            Language::Python,
+            Language::TypeScript,
+            Language::JavaScript,
+            Language::Markdown,
+            Language::Yaml,
+            Language::Unknown,
+        ] {
+            let serialized = serde_json::to_string(&lang).unwrap();
+            let stripped = serialized.trim_matches('"');
+            assert_eq!(stripped, lang.as_str(), "as_str() must match serde name for {lang:?}");
+        }
+    }
 }
