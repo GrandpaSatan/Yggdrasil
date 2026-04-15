@@ -13,12 +13,20 @@ export default defineConfig({
     emptyOutDir: true,
     manifest: true,
     sourcemap: true,
+    // Single-file IIFE bundle. Rationale (discovered during Sprint 068 dogfood):
+    // VS Code's webview loads module scripts under a strict CSP in a way that
+    // silently fails for ambiguous classic-vs-module code — the panel opens
+    // black with no DevTools errors. A named IIFE with `format: "iife"` runs
+    // as a classic script, so the host can drop `type="module"` from the
+    // <script> tag in chatPanel.ts and the bundle executes synchronously.
     rollupOptions: {
       input: resolve(__dirname, "src/main.tsx"),
       output: {
+        format: "iife",
+        name: "FergusChat",
         entryFileNames: "assets/chat.[hash].js",
-        chunkFileNames: "assets/chat.chunk.[hash].js",
         assetFileNames: "assets/chat.[hash].[ext]",
+        inlineDynamicImports: true,
       },
     },
   },

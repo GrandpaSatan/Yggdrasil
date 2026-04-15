@@ -544,7 +544,12 @@ ${cssTag}
 </head>
 <body data-odin-url="${odinUrl}" data-voice-enabled="${voiceEnabled}" data-tts-enabled="${ttsEnabled}" data-voice-worklet-uri="${voiceWorkletUri}" data-voice-client-uri="${voiceClientUri}">
 <div id="root"></div>
-<script nonce="${nonce}" type="module" src="${chatJsUri}"></script>
+<!-- Classic (non-module) script: Vite builds an IIFE bundle (see
+     webviews/chat-react/vite.config.ts). VS Code's webview CSP silently
+     blocked module scripts during Sprint 068 dogfood, leaving the panel
+     black. Dropping type="module" fixed it and the bundle has zero
+     ESM-only syntax (no import.meta, no top-level await). -->
+<script nonce="${nonce}" src="${chatJsUri}"></script>
 </body>
 </html>`;
   }
