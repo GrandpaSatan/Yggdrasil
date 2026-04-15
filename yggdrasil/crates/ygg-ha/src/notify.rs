@@ -89,7 +89,13 @@ impl HaClient {
             "sending HA notification"
         );
 
-        self.call_service("notify", target, data).await
+        self.call_service(
+            "notify",
+            target,
+            data,
+            crate::client::HaClient::DEFAULT_ALLOWED_DOMAINS,
+        )
+        .await
     }
 
     /// Send a simple text notification (convenience wrapper).

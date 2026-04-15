@@ -146,13 +146,46 @@ impl HaClient {
             .map_err(|e| HaError::Parse(e.to_string()))
     }
 
+    /// Default HA domain allowlist (Sprint 069 Phase C, VULN-005).
+    ///
+    /// These are the only domains the default call_service path will dispatch.
+    /// Callers can supply their own allowlist for privileged contexts.
+    pub const DEFAULT_ALLOWED_DOMAINS: &'static [&'static str] = &[
+        "light",
+        "switch",
+        "media_player",
+        "script",
+        "automation",
+        "scene",
+        "cover",
+        "climate",
+        "fan",
+        "notify",
+        "persistent_notification",
+        "homeassistant",
+        "input_boolean",
+        "input_button",
+    ];
+
     /// Call an HA service (e.g., turn on a light).
+    ///
+    /// Sprint 069 Phase C (VULN-005): `allowed_domains` restricts the set of
+    /// domains this call will dispatch to. Callers supply either
+    /// `HaClient::DEFAULT_ALLOWED_DOMAINS` for the stock permit-list or their
+    /// own curated slice for privileged code paths. A mismatched domain
+    /// returns `HaError::DomainNotAllowed` before any HTTP is sent.
     pub async fn call_service(
         &self,
         domain: &str,
         service: &str,
         data: serde_json::Value,
+        allowed_domains: &[&str],
     ) -> Result<(), HaError> {
+        if !allowed_domains.iter().any(|d| d.eq_ignore_ascii_case(domain)) {
+            return Err(HaError::DomainNotAllowed {
+                domain: domain.to_string(),
+            });
+        }
         let url = format!("{}/api/services/{domain}/{service}", self.base_url);
         let resp = self
             .http

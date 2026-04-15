@@ -4156,7 +4156,12 @@ pub async fn ha_call_service(
     }
 
     match client
-        .call_service(&params.domain, &params.service, params.data.clone())
+        .call_service(
+            &params.domain,
+            &params.service,
+            params.data.clone(),
+            ygg_ha::HaClient::DEFAULT_ALLOWED_DOMAINS,
+        )
         .await
     {
         Ok(()) => {

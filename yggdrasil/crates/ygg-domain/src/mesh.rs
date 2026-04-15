@@ -117,7 +117,13 @@ fn default_missed_threshold() -> u32 {
 /// Gate policy engine for controlling inter-node access.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GateConfig {
-    /// Default policy when no rule matches (default: allow).
+    /// Default policy when no rule matches.
+    ///
+    /// Sprint 069 Phase C (FLAW-009): defaults to **Deny**. A mesh-node gate
+    /// MUST fail closed if its config is missing or broken — an absent
+    /// config file must never leave the mesh wide-open. Callers that want
+    /// the permissive behaviour can set `default_policy: allow` explicitly
+    /// in their gate config, but implicit Allow is a footgun.
     #[serde(default = "default_gate_policy")]
     pub default_policy: GatePolicy,
     /// Deny rules evaluated in order. First match wins.
@@ -128,7 +134,8 @@ pub struct GateConfig {
 impl Default for GateConfig {
     fn default() -> Self {
         Self {
-            default_policy: GatePolicy::Allow,
+            // FLAW-009 (Sprint 069 Phase C): fail closed by default.
+            default_policy: GatePolicy::Deny,
             rules: Vec::new(),
         }
     }
@@ -142,7 +149,9 @@ pub enum GatePolicy {
 }
 
 fn default_gate_policy() -> GatePolicy {
-    GatePolicy::Allow
+    // FLAW-009 (Sprint 069 Phase C): fail closed when serde reads a config
+    // that omits `default_policy`. Matches `impl Default for GateConfig`.
+    GatePolicy::Deny
 }
 
 /// A gate rule matching source/target node and tool name.

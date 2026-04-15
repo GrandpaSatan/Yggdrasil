@@ -512,7 +512,7 @@ async fn execute_ha_tool(
                 ));
             }
 
-            ha.call_service(domain, service, data)
+            ha.call_service(domain, service, data, ygg_ha::HaClient::DEFAULT_ALLOWED_DOMAINS)
                 .await
                 .map_err(|e| format!("HA call_service error: {e}"))?;
 

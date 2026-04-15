@@ -13,4 +13,7 @@ pub enum HaError {
     Timeout(String),
     #[error("HA automation generation failed: {0}")]
     Generation(String),
+    /// Sprint 069 Phase C (VULN-005): domain not in caller's allowlist.
+    #[error("HA domain `{domain}` not in allowlist (VULN-005 guard)")]
+    DomainNotAllowed { domain: String },
 }
