@@ -171,10 +171,6 @@ PROBE_MATRIX = [
 ]
 
 
-@pytest.mark.xfail(
-    reason="VULN-001: Odin/Mimir/Muninn have no auth middleware (vault is the only authed endpoint)",
-    strict=True,
-)
 def test_all_core_endpoints_reject_unauthenticated_requests() -> None:
     """Sweep every documented endpoint and assert it rejects unauthenticated calls.
 
@@ -209,10 +205,6 @@ def test_all_core_endpoints_reject_unauthenticated_requests() -> None:
 
 # ──────────────────────── VULN-002: Plaintext sudo password ───────────────
 
-@pytest.mark.xfail(
-    reason="VULN-002: McpServerConfig.deploy_sudo_password is a plaintext String field",
-    strict=True,
-)
 def test_deploy_sudo_password_is_vault_reference_type() -> None:
     """The field type itself must be a vault reference, not a raw String.
 

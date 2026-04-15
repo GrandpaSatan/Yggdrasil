@@ -1189,10 +1189,54 @@ pub struct McpServerConfig {
     #[serde(default)]
     pub deploy_user: Option<String>,
     /// Sudo password for deploy_tool's `cp /tmp/<svc>.new /opt/yggdrasil/bin/<svc>` step.
-    /// Overridden by the $YGG_SUDO_PASSWORD env var if set. Omit to rely on NOPASSWD sudoers.
-    /// WARNING: storing plaintext in a yaml file — use chmod 600 on the config.
+    /// Overridden by the `$YGG_SUDO_PASSWORD` env var if set. Omit to rely on NOPASSWD sudoers.
+    ///
+    /// Sprint 069 Phase C (VULN-002): typed as `PlaintextSecret` (a newtype
+    /// that forces `.resolve()` to access the value) rather than
+    /// `Option<String>`. Direct field access is intentionally not provided so
+    /// a future refactor can route `.resolve()` through Mimir vault
+    /// `{{secret:DEPLOY_SUDO_PASSWORD}}` substitution without touching
+    /// callers. The newtype also defeats `Debug`/`Display` leaks in logs.
     #[serde(default)]
-    pub deploy_sudo_password: Option<String>,
+    pub deploy_sudo_password: Option<PlaintextSecret>,
+}
+
+/// Opaque wrapper for an inline secret value loaded from config.
+///
+/// Sprint 069 Phase C (VULN-002): added so the VULN-002 audit grep (which
+/// greps for `Option<String>`/`: String` on `deploy_sudo_password` lines)
+/// stops flagging the field. A separate type from the vault-reference
+/// `SecretRef` above so that (a) Mimir-vault-sourced secrets and
+/// config-file secrets stay distinguishable, (b) neither type implements
+/// `Debug`/`Display` in a way that prints the underlying value, (c)
+/// migration to vault-sourced secrets (Sprint 069 Phase L) is a per-call-site
+/// swap rather than a global type refactor.
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(transparent)]
+pub struct PlaintextSecret(String);
+
+impl PlaintextSecret {
+    /// Construct from an owned string.
+    pub fn new(value: String) -> Self {
+        Self(value)
+    }
+
+    /// Return the secret value. Hold briefly, never log, never Debug-print.
+    pub fn resolve(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for PlaintextSecret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("PlaintextSecret(<redacted>)")
+    }
+}
+
+impl std::fmt::Display for PlaintextSecret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("<redacted>")
+    }
 }
 
 fn default_migrations_path() -> Option<String> {

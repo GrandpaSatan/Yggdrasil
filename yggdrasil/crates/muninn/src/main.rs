@@ -115,6 +115,8 @@ async fn main() -> anyhow::Result<()> {
         )
         // Metrics middleware: records request count and duration for all routes.
         .layer(middleware::from_fn(ygg_server::metrics::http_metrics("muninn")))
+        // VULN-001 (Sprint 069 Phase C): Bearer auth on every non-public route.
+        .layer(middleware::from_fn(ygg_server::auth::bearer_auth))
         .layer(CorsLayer::permissive())
         // Cap request body at 2MB to prevent abuse.
         .layer(DefaultBodyLimit::max(2 * 1024 * 1024))

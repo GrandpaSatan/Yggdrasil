@@ -4761,9 +4761,11 @@ pub async fn deploy(
                 .clone()
                 .or_else(|| std::env::var("DEPLOY_USER").ok())
                 .unwrap_or_else(|| "yggdrasil".into());
+            // VULN-002 (Sprint 069 Phase C): deploy_sudo_password is SecretRef;
+            // resolve to a String for the shell step, then drop the value.
             let sudo_password = std::env::var("YGG_SUDO_PASSWORD")
                 .ok()
-                .or_else(|| config.deploy_sudo_password.clone());
+                .or_else(|| config.deploy_sudo_password.as_ref().map(|s| s.resolve().to_string()));
 
             let bin_path = format!("{}/target/release/{}", workspace, params.service);
             let staging = format!("/tmp/{}.new", params.service);

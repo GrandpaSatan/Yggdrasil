@@ -4,6 +4,7 @@
 //! and ygg-node: metrics middleware, graceful shutdown, error types, health
 //! checks, telemetry initialization, and systemd notification.
 
+pub mod auth;
 pub mod error;
 pub mod health;
 pub mod init;

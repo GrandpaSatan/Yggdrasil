@@ -447,6 +447,10 @@ async fn main() -> anyhow::Result<()> {
         )
         // Metrics middleware: records request count and duration for all routes.
         .layer(middleware::from_fn(ygg_server::metrics::http_metrics("odin")))
+        // VULN-001 (Sprint 069 Phase C): Bearer auth on every non-public route.
+        // /health and /metrics are exempt via PUBLIC_PATHS; node-to-node calls
+        // bearing X-Yggdrasil-Internal: true also bypass (dreamer, flow runners).
+        .layer(middleware::from_fn(ygg_server::auth::bearer_auth))
         // CORS middleware — permissive for private LAN deployment.
         .layer(CorsLayer::permissive())
         // Cap request body at 2MB to prevent abuse.
