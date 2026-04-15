@@ -82,14 +82,32 @@ pub async fn run_dream(
     let store_resp = client
         .post(&store_url)
         .timeout(Duration::from_secs(30))
+        // Sprint 069 Phase E: mirror the Odin chat-call trust header onto the
+        // Mimir store call too. Without it, Phase C's bearer auth (VULN-001)
+        // rejects dreamer writes with 401 — the root cause of the intermittent
+        // "dream engram store returned non-success" bursts in
+        // yggdrasil-dreamer.service logs.
+        .header("X-Yggdrasil-Internal", "true")
         .json(&store_body)
         .send()
         .await
         .map_err(|e| anyhow::anyhow!("mimir store POST {}: {e}", store_url))?;
 
     if !store_resp.status().is_success() {
+        // Capture URL + body so future regressions leave a full breadcrumb in
+        // the logs instead of just "non-success". Sprint 069 Phase E follow-up.
         let status = store_resp.status();
-        tracing::warn!(flow = %flow.name, status = %status, "dream engram store returned non-success");
+        let body = store_resp
+            .text()
+            .await
+            .unwrap_or_else(|e| format!("<body read failed: {e}>"));
+        tracing::warn!(
+            flow = %flow.name,
+            url = %store_url,
+            status = %status,
+            body = %body,
+            "dream engram store returned non-success"
+        );
     }
 
     Ok(text)

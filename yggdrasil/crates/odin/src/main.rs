@@ -372,14 +372,35 @@ async fn main() -> anyhow::Result<()> {
     // OPTIMIZATION: PrometheusHandle::render() is lock-free and safe for
     // concurrent scrapes. The clone here is cheap (it's an Arc internally).
     let prom_handle_clone = prometheus_handle.clone();
-    let app = Router::new()
+    // Sprint 069 Phase E: expose the debug-increment-busy test hook only when
+    // explicitly opted in via `YGG_DEBUG_HOOKS=1`. Production services leave
+    // this unset so the test hook isn't reachable on the live fleet.
+    let debug_hooks_enabled = std::env::var("YGG_DEBUG_HOOKS")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    if debug_hooks_enabled {
+        tracing::warn!(
+            "YGG_DEBUG_HOOKS=1 — /internal/debug/increment_busy is live (test-only)"
+        );
+    }
+
+    let mut app = Router::new()
         // OpenAI-compatible endpoints.
         .route("/v1/chat/completions", post(handlers::chat_handler))
         .route("/v1/agent/stream", post(handlers::agent_stream_handler))
         .route("/v1/models", get(handlers::models_handler))
         // Sprint 068 Phase 6a: in-flight chat counter per backend.
         .route("/api/backends/busy", get(handlers::backends_busy_handler))
-        .route("/internal/activity", get(handlers::internal_activity))
+        .route("/internal/activity", get(handlers::internal_activity));
+
+    if debug_hooks_enabled {
+        app = app.route(
+            "/internal/debug/increment_busy",
+            post(handlers::debug_increment_busy_handler),
+        );
+    }
+
+    let app = app
         // Mimir transparent proxy endpoints (Fergus client compatibility).
         .route("/api/v1/query", post(handlers::proxy_query))
         .route("/api/v1/store", post(handlers::proxy_store))

@@ -143,7 +143,8 @@ pub async fn pop(
         WHERE t.id = next.id
         RETURNING t.id, t.title, t.description, t.status, t.priority,
                   t.agent, t.project, t.tags, t.result,
-                  t.created_at, t.updated_at, t.completed_at"
+                  t.created_at, t.updated_at, t.completed_at,
+                  t.label, t.context, t.ttl_secs"
     } else {
         "WITH next AS (
             SELECT id FROM yggdrasil.tasks
@@ -158,7 +159,8 @@ pub async fn pop(
         WHERE t.id = next.id
         RETURNING t.id, t.title, t.description, t.status, t.priority,
                   t.agent, t.project, t.tags, t.result,
-                  t.created_at, t.updated_at, t.completed_at"
+                  t.created_at, t.updated_at, t.completed_at,
+                  t.label, t.context, t.ttl_secs"
     };
 
     let row = if let Some(proj) = project {

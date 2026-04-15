@@ -18,17 +18,9 @@ import requests
 from helpers.services import service_urls
 
 
-@pytest.mark.xfail(
-    reason="task_pop SQL bug (Mimir): references a `label` column that isn't in the schema. "
-           "Remove this xfail once the migration lands.",
-    strict=True,
-    # NOTE: `raises=` is intentionally omitted. Pinning it to AssertionError
-    # would break CI if the pop path is ever refactored to go through a
-    # retry_policy-wrapped client method (the 500 would then surface as
-    # TransientHttpError after retries), or if the 500's body changes and
-    # raises requests.JSONDecodeError. A broader xfail keeps tracking the
-    # bug without locking in the current exception shape.
-)
+_INTERNAL_HEADERS = {"X-Yggdrasil-Internal": "true"}
+
+
 @pytest.mark.required_services("mimir")
 def test_task_push_pop_complete_roundtrip(run_scope) -> None:
     """Push a uniquely-titled task, pop until we find it, complete it.
@@ -44,11 +36,21 @@ def test_task_push_pop_complete_roundtrip(run_scope) -> None:
     strict failure forcing removal of the marker).
     """
     url = service_urls()["mimir"].rstrip("/")
+    # Per-run unique project isolates this test from real in-flight graph_link
+    # work sitting in the shared queue. Pop filters by project, so our task is
+    # always the first (and only) match.
+    iso_project = f"e2e_task_queue_{run_scope.run_id}"
     marker = f"e2e task {run_scope.run_id}"
     push = requests.post(
         f"{url}/api/v1/tasks/push",
-        json={"title": marker, "description": "round-trip test", "priority": 0},
+        json={
+            "title": marker,
+            "description": "round-trip test",
+            "priority": 0,
+            "project": iso_project,
+        },
         timeout=10,
+        headers=_INTERNAL_HEADERS,
     )
     assert push.status_code in (200, 201), (
         f"push must return 200/201; got {push.status_code}: {push.text[:200]}"
@@ -69,8 +71,12 @@ def test_task_push_pop_complete_roundtrip(run_scope) -> None:
     for attempt in range(MAX_POPS):
         pop = requests.post(
             f"{url}/api/v1/tasks/pop",
-            json={"agent": f"e2e-{run_scope.run_id[:8]}"},
+            json={
+                "agent": f"e2e-{run_scope.run_id[:8]}",
+                "project": iso_project,
+            },
             timeout=10,
+            headers=_INTERNAL_HEADERS,
         )
         assert pop.status_code == 200, (
             f"pop must return 200 (attempt {attempt}); got {pop.status_code}: {pop.text[:200]}"
@@ -92,6 +98,7 @@ def test_task_push_pop_complete_roundtrip(run_scope) -> None:
             f"{url}/api/v1/tasks/complete",
             json={"task_id": task.get("id"), "success": True},
             timeout=10,
+            headers=_INTERNAL_HEADERS,
         )
     assert found is not None, (
         f"our task {task_id} never popped after draining {len(popped_others)} stale entries "
@@ -105,6 +112,7 @@ def test_task_push_pop_complete_roundtrip(run_scope) -> None:
         f"{url}/api/v1/tasks/complete",
         json={"task_id": task_id, "success": True},
         timeout=10,
+        headers=_INTERNAL_HEADERS,
     )
     assert complete.status_code == 200, (
         f"complete must return 200; got {complete.status_code}: {complete.text[:200]}"

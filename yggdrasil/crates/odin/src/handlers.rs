@@ -346,11 +346,39 @@ fn is_internal_request(headers: &axum::http::HeaderMap) -> bool {
 /// 2. If LLM router is available, send classification request with SDR hint.
 /// 3. Merge: LLM wins when available; SDR-only above 0.85; keyword fallback.
 /// 4. Fire-and-forget logging of the routing decision.
+/// Intermediate signals captured during `hybrid_classify`.
+///
+/// Sprint 069 Phase E: surfaces the raw SDR + LLM classifier outputs so the
+/// caller can persist them in `RequestLogEntry` (previously the SDR/LLM fields
+/// were hardcoded `None` with a TODO marker). All fields are `Option` because
+/// either classifier may be unavailable (LLM down, SDR absent, low-confidence
+/// misses, etc.).
+#[derive(Debug, Default, Clone)]
+pub(crate) struct HybridSignals {
+    pub(crate) sdr_intent: Option<String>,
+    pub(crate) sdr_confidence: Option<f64>,
+    pub(crate) llm_intent: Option<String>,
+    pub(crate) llm_confidence: Option<f64>,
+    pub(crate) llm_agrees_with_sdr: Option<bool>,
+}
+
 async fn hybrid_classify(
     state: &AppState,
     message: &str,
     query_sdr: Option<&ygg_domain::sdr::Sdr>,
 ) -> RoutingDecision {
+    hybrid_classify_with_signals(state, message, query_sdr).await.0
+}
+
+/// Variant that also returns the intermediate SDR + LLM signals. The thin
+/// `hybrid_classify` wrapper above preserves the existing call-site signature
+/// for the flow-engine path; the chat-completions handler uses the full
+/// signals form to populate its request log.
+async fn hybrid_classify_with_signals(
+    state: &AppState,
+    message: &str,
+    query_sdr: Option<&ygg_domain::sdr::Sdr>,
+) -> (RoutingDecision, HybridSignals) {
     let start = std::time::Instant::now();
 
     // SDR classification (~4μs).
@@ -497,7 +525,14 @@ async fn hybrid_classify(
         );
     }
 
-    decision
+    let signals = HybridSignals {
+        sdr_intent: sdr_result.as_ref().map(|s| s.intent.clone()),
+        sdr_confidence: sdr_result.as_ref().map(|s| s.confidence),
+        llm_intent: llm_result.as_ref().map(|l| l.intent.clone()),
+        llm_confidence: llm_result.as_ref().map(|l| l.confidence),
+        llm_agrees_with_sdr: llm_result.as_ref().map(|l| l.agrees_with_sdr),
+    };
+    (decision, signals)
 }
 
 /// Acquire a backend semaphore, rerouting to a fallback if the primary is at capacity.
@@ -1235,12 +1270,21 @@ pub async fn chat_handler(
     }
 
     // ── 5b. Hybrid SDR + LLM routing (Sprint 052) ────────────────
+    //
+    // Sprint 069 Phase E: capture the intermediate SDR + LLM signals so the
+    // request log records sdr_intent / llm_intent / llm_agrees_with_sdr
+    // instead of the previous hardcoded `None`s. Only populated when the
+    // hybrid classifier runs (model overrides and no-LLM fallbacks skip it).
+    let mut hybrid_signals: Option<HybridSignals> = None;
     let mut decision = if let Some(ref model) = request.model {
         state.router.resolve_backend_for_model(model).ok_or_else(|| {
             OdinError::BadRequest(format!("model not found: {model}"))
         })?
     } else if state.llm_router.is_some() {
-        hybrid_classify(&state, &last_user_message, query_sdr.as_ref()).await
+        let (d, s) =
+            hybrid_classify_with_signals(&state, &last_user_message, query_sdr.as_ref()).await;
+        hybrid_signals = Some(s);
+        d
     } else {
         state.router.classify(&last_user_message)
     };
@@ -1286,11 +1330,11 @@ pub async fn chat_handler(
             timestamp: chrono::Utc::now(),
             source: "http".into(),
             user_message: last_user_message.clone(),
-            sdr_intent: None, // TODO: pass through from hybrid_classify
-            sdr_confidence: None,
-            llm_intent: None,
-            llm_confidence: None,
-            llm_agrees_with_sdr: None,
+            sdr_intent: hybrid_signals.as_ref().and_then(|s| s.sdr_intent.clone()),
+            sdr_confidence: hybrid_signals.as_ref().and_then(|s| s.sdr_confidence),
+            llm_intent: hybrid_signals.as_ref().and_then(|s| s.llm_intent.clone()),
+            llm_confidence: hybrid_signals.as_ref().and_then(|s| s.llm_confidence),
+            llm_agrees_with_sdr: hybrid_signals.as_ref().and_then(|s| s.llm_agrees_with_sdr),
             final_intent: decision.intent.clone(),
             router_method: format!("{:?}", decision.router_method),
             model: decision.model.clone(),
@@ -1954,6 +1998,69 @@ pub async fn backends_busy_handler(
         out.insert(backend.name.clone(), count);
     }
     Json(out)
+}
+
+/// `POST /internal/debug/increment_busy?backend=<name>` — Sprint 069 Phase E.
+///
+/// Test-only hook that directly bumps the `active_chats` counter for a backend
+/// without dispatching a real LLM request. Needed because the Sprint 068
+/// fergus-chat test wants to verify the "busy counter" UX path without racing
+/// with an actual in-flight inference call.
+///
+/// Only wired up when `YGG_DEBUG_HOOKS=1` is set at server startup (see
+/// `main.rs` route registration). Production services leave this env unset.
+#[derive(Debug, serde::Deserialize)]
+pub struct IncrementBusyQuery {
+    pub backend: String,
+    /// Optional: how many active chats to simulate. Default 1.
+    #[serde(default = "default_increment_delta")]
+    pub delta: i32,
+}
+
+fn default_increment_delta() -> i32 {
+    1
+}
+
+pub async fn debug_increment_busy_handler(
+    State(state): State<AppState>,
+    axum::extract::Query(q): axum::extract::Query<IncrementBusyQuery>,
+) -> Result<Json<serde_json::Value>, OdinError> {
+    // Accept the backend name even if not present in `state.backends` — test
+    // fixtures sometimes probe with mock names. Create the DashMap entry
+    // lazily so the counter reads back to the HTTP caller.
+    let entry = state
+        .active_chats
+        .entry(q.backend.clone())
+        .or_insert_with(|| std::sync::atomic::AtomicU32::new(0));
+    let new_val = if q.delta >= 0 {
+        entry
+            .value()
+            .fetch_add(q.delta as u32, std::sync::atomic::Ordering::Relaxed)
+            + q.delta as u32
+    } else {
+        // Guard against underflow: clamp at 0.
+        let dec = (-q.delta) as u32;
+        let prev = entry
+            .value()
+            .fetch_update(
+                std::sync::atomic::Ordering::Relaxed,
+                std::sync::atomic::Ordering::Relaxed,
+                |cur| Some(cur.saturating_sub(dec)),
+            )
+            .unwrap_or(0);
+        prev.saturating_sub(dec)
+    };
+    drop(entry); // release DashMap lock before returning
+    tracing::info!(
+        backend = %q.backend,
+        delta = q.delta,
+        new_value = new_val,
+        "debug_increment_busy hook fired"
+    );
+    Ok(Json(serde_json::json!({
+        "backend": q.backend,
+        "count": new_val,
+    })))
 }
 
 /// Odin health check endpoint.

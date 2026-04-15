@@ -1433,6 +1433,52 @@ pub async fn get_engram_by_id(
 }
 
 // ---------------------------------------------------------------------------
+// DELETE /api/v1/engrams/{id}  (Sprint 069 Phase E)
+// ---------------------------------------------------------------------------
+
+/// Delete a single engram by ID, invalidating all dependent indexes.
+///
+/// Sprint 069 Phase E: previously returned 405 Method Not Allowed; tests
+/// doing targeted cleanup had to use the per-tag `delete_by_tag` helper,
+/// which over-fetches via recall. This endpoint mirrors the same
+/// invalidation pattern `consolidate_cycle` uses on its dedup path:
+/// delete the Postgres row, drop both Qdrant vectors (SDR + v2), and
+/// remove the entry from the in-memory SDR + dense indexes. Returns 404
+/// if the engram never existed, 200 on successful deletion.
+pub async fn delete_engram_by_id(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(id): axum::extract::Path<Uuid>,
+) -> Result<impl IntoResponse, MimirError> {
+    // 404 early if the row isn't there — avoids silently succeeding when a
+    // caller deletes something that was already gone.
+    let exists: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM yggdrasil.engrams WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_one(state.store.pool())
+    .await
+    .map_err(|e| MimirError::Internal(format!("count query failed: {e}")))?;
+    if exists == 0 {
+        return Err(MimirError::NotFound(format!("engram {id}")));
+    }
+
+    ygg_store::postgres::engrams::delete_engram(state.store.pool(), id).await?;
+    let _ = state.vectors.delete_many("engrams_sdr", &[id]).await;
+    let _ = state
+        .vectors
+        .delete_many(crate::state::V2_SDR_COLLECTION, &[id])
+        .await;
+    state.sdr_index.remove(id);
+    state.dense_index.remove(id);
+
+    tracing::info!(engram_id = %id, "engram deleted via DELETE /api/v1/engrams/{{id}}");
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::json!({ "deleted": true, "id": id })),
+    ))
+}
+
+// ---------------------------------------------------------------------------
 // POST /api/v1/embed
 // ---------------------------------------------------------------------------
 
