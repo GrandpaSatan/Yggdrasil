@@ -19,6 +19,7 @@ pub mod agent;
 pub mod camera;
 pub mod context;
 pub mod error;
+pub mod fabric;
 pub mod flow;
 pub mod flow_scheduler;
 pub mod flow_secrets;
