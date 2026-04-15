@@ -60,6 +60,7 @@ impl FlowResult {
 pub struct FlowEngine {
     http_client: reqwest::Client,
     backends: Arc<Vec<BackendState>>,
+    fabric: crate::fabric::FabricClient,
 }
 
 impl FlowEngine {
@@ -67,6 +68,7 @@ impl FlowEngine {
         Self {
             http_client,
             backends,
+            fabric: crate::fabric::FabricClient::from_env(),
         }
     }
 
@@ -231,7 +233,23 @@ impl FlowEngine {
         state: Option<&AppState>,
     ) -> Result<(), OdinError> {
         let step_start = Instant::now();
-        let input_text = self.resolve_input(&step.input, user_message, outputs)?;
+        let mut input_text = self.resolve_input(&step.input, user_message, outputs)?;
+
+        // Sprint 069 Phase G.3b — pre-step fabric enrichment.
+        // Gated by YGG_FABRIC_ENABLED=1; no-op when disabled. Uses
+        // flow.name as a first-pass flow_id — per-session flow_id
+        // threading is a follow-up.
+        if self.fabric.enabled() {
+            let hits = self.fabric.query(&flow.name, &input_text, 3).await;
+            if !hits.is_empty() {
+                let prefix = crate::fabric::format_working_memory_prefix(&hits);
+                input_text = format!("{prefix}{input_text}");
+                tracing::debug!(
+                    flow = %flow.name, step = %step.name, hits = hits.len(),
+                    "fabric enriched step input"
+                );
+            }
+        }
 
         // Only pass multimodal data for steps that consume raw input
         let step_images = match step.input {
@@ -275,7 +293,22 @@ impl FlowEngine {
         );
 
         *final_key = step.output_key.clone();
-        outputs.insert(step.output_key.clone(), truncated);
+        outputs.insert(step.output_key.clone(), truncated.clone());
+
+        // Sprint 069 Phase G.3b — post-step fabric publish.
+        // Fire-and-forget: errors are logged inside the client, never
+        // bubble to the caller. Uses step_timings.len() as step_n so
+        // loop iterations get unique step numbers.
+        if self.fabric.enabled() {
+            let step_n = step_timings.len() as u32;
+            let flow_name = flow.name.clone();
+            let model = step.model.clone();
+            let fabric = self.fabric.clone();
+            tokio::spawn(async move {
+                fabric.publish(&flow_name, step_n, &model, &truncated).await;
+            });
+        }
+
         Ok(())
     }
 
