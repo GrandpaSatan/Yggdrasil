@@ -1,0 +1,18 @@
+/**
+ * Map VS Code's native theme variables onto Yggdrasil-scoped custom properties.
+ * Tailwind's `colors.*` entries in `tailwind.config.ts` reference these.
+ *
+ * Rationale: pulling directly from `--vscode-*` in Tailwind would couple every
+ * utility class to a long variable name. The indirection lets Phase 2
+ * components read `text-fg bg-bg border-border` without knowing the underlying
+ * VS Code token names.
+ */
+:root {
+  --ygg-bg: var(--vscode-editor-background);
+  --ygg-bg-elev: var(--vscode-sideBar-background, var(--vscode-editor-background));
+  --ygg-fg: var(--vscode-editor-foreground);
+  --ygg-fg-dim: var(--vscode-descriptionForeground, var(--vscode-editor-foreground));
+  --ygg-border: var(--vscode-panel-border, var(--vscode-widget-border, transparent));
+  --ygg-accent: var(--vscode-focusBorder, var(--vscode-button-background));
+  --ygg-danger: var(--vscode-errorForeground, #f48771);
+}

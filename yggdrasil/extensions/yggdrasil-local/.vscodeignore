@@ -4,3 +4,12 @@ node_modules/**
 *.vsix
 .vscode-test/**
 tsconfig.json
+tests/**
+webviews/chat-react/src/**
+webviews/chat-react/node_modules/**
+webviews/chat-react/package.json
+webviews/chat-react/package-lock.json
+webviews/chat-react/tsconfig.json
+webviews/chat-react/vite.config.ts
+webviews/chat-react/tailwind.config.ts
+webviews/chat-react/postcss.config.cjs

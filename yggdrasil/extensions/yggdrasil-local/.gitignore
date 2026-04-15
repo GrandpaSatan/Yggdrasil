@@ -2,3 +2,5 @@ out/
 node_modules/
 *.vsix
 .vscode-test/
+dist/chat-react/
+webviews/chat-react/node_modules/

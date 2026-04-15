@@ -1,16 +1,19 @@
 /**
- * Chat Panel — Continue/Cline-style streaming chat over Odin.
+ * Chat Panel — Fergus persona, React + Vite + Tailwind webview.
  *
  * Responsibilities:
- *   - Own a WebviewPanel and serve the chat UI (media/chat.{css,js})
+ *   - Own a WebviewPanel and serve the Fergus chat UI
+ *     (built bundle at `dist/chat-react/assets/chat.<hash>.js`)
  *   - Persist threads via ChatHistory (globalState, OS-local)
- *   - Preprocess input through slash commands
+ *   - Preprocess input through slash commands (flows, /memory, /clear, /help)
  *   - Stream completions from Odin's /v1/chat/completions (SSE)
  *   - Inject attachments (editor selection, file content) as context
  *   - Expose public helpers for code actions to seed a new turn
  */
 
 import * as vscode from "vscode";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { OdinClient, ChatMessage, SwarmEvent } from "../api/odinClient";
 import { ChatHistory, ChatMsg, ChatThread } from "../chat/history";
 import { preprocess } from "../chat/slashCommands";
@@ -34,11 +37,16 @@ export class ChatPanel {
   ) {
     this.threadStore = new ThreadStore(context);
     const mediaRoot = vscode.Uri.joinPath(context.extensionUri, "media");
+    const bundleRoot = vscode.Uri.joinPath(context.extensionUri, "dist", "chat-react");
     this.panel = vscode.window.createWebviewPanel(
       ChatPanel.viewType,
       "Yggdrasil Chat",
       vscode.ViewColumn.Beside,
-      { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [mediaRoot] }
+      {
+        enableScripts: true,
+        retainContextWhenHidden: true,
+        localResourceRoots: [mediaRoot, bundleRoot],
+      },
     );
     this.panel.webview.html = this.getHtml();
 
@@ -49,33 +57,10 @@ export class ChatPanel {
 
     this.panel.onDidDispose(() => {
       this.abortCurrent?.();
-      this.configSub?.dispose();
       ChatPanel.instance = undefined;
     });
 
     this.panel.webview.onDidReceiveMessage((m) => this.handleMessage(m));
-
-    this.configSub = vscode.workspace.onDidChangeConfiguration((e) => {
-      if (
-        e.affectsConfiguration("yggdrasil.chat.theme") ||
-        e.affectsConfiguration("yggdrasil.chat.crtEffects") ||
-        e.affectsConfiguration("yggdrasil.chat.font")
-      ) {
-        const t = this.readChatTheme();
-        this.panel.webview.postMessage({ type: "themeChange", ...t });
-      }
-    });
-  }
-
-  private configSub: vscode.Disposable | undefined;
-
-  private readChatTheme(): { theme: string; crtEffects: boolean; font: string } {
-    const cfg = vscode.workspace.getConfiguration("yggdrasil.chat");
-    return {
-      theme: cfg.get<string>("theme", "classic"),
-      crtEffects: cfg.get<boolean>("crtEffects", false),
-      font: cfg.get<string>("font", "system"),
-    };
   }
 
   static show(context: vscode.ExtensionContext, odin: OdinClient, history: ChatHistory, seed?: ChatSeed): ChatPanel {
@@ -474,57 +459,52 @@ export class ChatPanel {
   }
 
   private getHtml(): string {
-    const mediaRoot = vscode.Uri.joinPath(this.context.extensionUri, "media");
-    const cssUri = this.panel.webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, "chat.css"));
-    const jsUri = this.panel.webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, "chat.js"));
-    const themePipboyUri = this.panel.webview.asWebviewUri(
-      vscode.Uri.joinPath(mediaRoot, "themes", "pipboy-green.css")
-    );
-    const themeBbsUri = this.panel.webview.asWebviewUri(
-      vscode.Uri.joinPath(mediaRoot, "themes", "bbs-cyan.css")
-    );
-    const crtUri = this.panel.webview.asWebviewUri(
-      vscode.Uri.joinPath(mediaRoot, "themes", "crt-effects.css")
-    );
-    const retroTypographyUri = this.panel.webview.asWebviewUri(
-      vscode.Uri.joinPath(mediaRoot, "themes", "retro-typography.css")
-    );
+    const extUri = this.context.extensionUri;
+    const mediaRoot = vscode.Uri.joinPath(extUri, "media");
+    const bundleRoot = vscode.Uri.joinPath(extUri, "dist", "chat-react");
 
-    // P4 — Voice push-to-talk (opt-in)
+    // Resolve the hashed chat bundle filenames via Vite's manifest.
+    // Fallback: glob-scan the assets dir if the manifest file is missing
+    // (e.g. first-run dev builds before the manifest is emitted).
+    const bundle = resolveChatBundle(bundleRoot.fsPath);
+    const chatJsUri = this.panel.webview.asWebviewUri(
+      vscode.Uri.joinPath(bundleRoot, bundle.js),
+    );
+    const chatCssUri = bundle.css
+      ? this.panel.webview.asWebviewUri(vscode.Uri.joinPath(bundleRoot, bundle.css))
+      : undefined;
+
+    // Voice push-to-talk (opt-in) — kept verbatim from Sprint 062.
+    // The React chat mounts `voice-client.js` from a useEffect by reading
+    // `data-voice-*` attributes off <body>.
     const voiceCfg = vscode.workspace.getConfiguration("yggdrasil.voice");
     const voiceEnabled = voiceCfg.get<boolean>("enabled", false);
     const ttsEnabled = voiceCfg.get<boolean>("ttsPlayback", true);
     const voiceWorkletUri = this.panel.webview.asWebviewUri(
-      vscode.Uri.joinPath(mediaRoot, "voice-worklet.js")
+      vscode.Uri.joinPath(mediaRoot, "voice-worklet.js"),
     );
     const voiceClientUri = this.panel.webview.asWebviewUri(
-      vscode.Uri.joinPath(mediaRoot, "voice-client.js")
+      vscode.Uri.joinPath(mediaRoot, "voice-client.js"),
     );
-    const odinUrl = vscode.workspace.getConfiguration("yggdrasil").get<string>("odinUrl", "http://localhost:8080");
+    const odinUrl = vscode.workspace
+      .getConfiguration("yggdrasil")
+      .get<string>("odinUrl", "http://localhost:8080");
 
-    // P2a — Prism syntax highlighting (vendored, no CDN)
-    const vendorRoot = vscode.Uri.joinPath(mediaRoot, "vendor");
-    const langRoot = vscode.Uri.joinPath(vendorRoot, "prism-languages");
-    const prismCoreUri = this.panel.webview.asWebviewUri(vscode.Uri.joinPath(vendorRoot, "prism.js"));
-    const prismLangUris: Record<string, vscode.Uri> = {};
-    for (const lang of ["clike", "javascript", "typescript", "rust", "go", "python", "json", "toml", "yaml", "bash", "sql", "markdown"]) {
-      prismLangUris[lang] = this.panel.webview.asWebviewUri(vscode.Uri.joinPath(langRoot, `${lang}.js`));
-    }
-    const hlClassicUri = this.panel.webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, "themes", "highlight-classic.css"));
-    const hlPipboyUri  = this.panel.webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, "themes", "highlight-pipboy.css"));
-    const hlBbsUri     = this.panel.webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, "themes", "highlight-bbs.css"));
     const nonce = getNonce();
     const csp = [
       `default-src 'none'`,
       `img-src ${this.panel.webview.cspSource} data:`,
+      // Tailwind's production build inlines `@layer` rules in a single CSS
+      // asset loaded via <link>. 'unsafe-inline' is retained for now to tolerate
+      // any component-injected <style> tags (e.g. TipTap). Tightening is
+      // tracked in Sprint 068 Risk #1.
       `style-src ${this.panel.webview.cspSource} 'unsafe-inline'`,
       `font-src ${this.panel.webview.cspSource}`,
       `script-src 'nonce-${nonce}'`,
       `connect-src ws: wss: http: https:`,
     ].join("; ");
 
-    const { theme, crtEffects, font } = this.readChatTheme();
-    const crtOverlayHtml = crtEffects ? `<div class="crt-overlay" id="crt-overlay"></div>` : "";
+    const cssTag = chatCssUri ? `<link rel="stylesheet" href="${chatCssUri}">` : "";
 
     return `<!DOCTYPE html>
 <html lang="en">
@@ -532,92 +512,55 @@ export class ChatPanel {
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="${csp}">
 <title>Yggdrasil Chat</title>
-<link rel="stylesheet" href="${cssUri}">
-<link rel="stylesheet" href="${crtUri}">
-<link rel="stylesheet" href="${themePipboyUri}">
-<link rel="stylesheet" href="${themeBbsUri}">
-<link rel="stylesheet" href="${retroTypographyUri}">
-<link rel="stylesheet" href="${hlClassicUri}">
-<link rel="stylesheet" href="${hlPipboyUri}">
-<link rel="stylesheet" href="${hlBbsUri}">
+${cssTag}
 </head>
-<body data-theme="${theme}" data-font="${font}" data-crt="${crtEffects ? "on" : "off"}" data-prism-langs='${JSON.stringify(Object.fromEntries(Object.entries(prismLangUris).map(([k,v])=>[k,v.toString()])))}' data-odin-url="${odinUrl}" data-voice-enabled="${voiceEnabled}" data-tt-enabled="${ttsEnabled}" data-voice-worklet-uri="${voiceWorkletUri}">
-<script nonce="${nonce}" src="${prismCoreUri}"></script>
-<script nonce="${nonce}" src="${prismLangUris["clike"]}"></script>
-<script nonce="${nonce}" src="${prismLangUris["javascript"]}"></script>
-<script nonce="${nonce}" src="${prismLangUris["typescript"]}"></script>
-<script nonce="${nonce}" src="${prismLangUris["rust"]}"></script>
-<script nonce="${nonce}" src="${prismLangUris["go"]}"></script>
-<script nonce="${nonce}" src="${prismLangUris["python"]}"></script>
-<script nonce="${nonce}" src="${prismLangUris["json"]}"></script>
-<script nonce="${nonce}" src="${prismLangUris["toml"]}"></script>
-<script nonce="${nonce}" src="${prismLangUris["yaml"]}"></script>
-<script nonce="${nonce}" src="${prismLangUris["bash"]}"></script>
-<script nonce="${nonce}" src="${prismLangUris["sql"]}"></script>
-<script nonce="${nonce}" src="${prismLangUris["markdown"]}"></script>
-
-${crtOverlayHtml}
-
-<div class="titlebar">
-  <div class="titlebar-left">
-    <select id="thread-select" title="Switch thread"></select>
-    <button class="icon-btn" id="new-thread" title="New thread">+</button>
-  </div>
-  <div class="titlebar-center">
-    <span class="titlebar-brand">YGG</span>
-  </div>
-  <div class="titlebar-right">
-    <select id="flow-select" title="Pin a flow"></select>
-    <select id="model-select" title="Model"></select>
-    <button class="icon-btn" id="clear-thread" title="Clear thread">&#8856;</button>
-    <button class="icon-btn" id="delete-thread" title="Delete thread">&#10005;</button>
-    <button class="icon-btn" id="mic-btn" title="Push to talk (voice disabled)" style="display:none;" aria-label="Push to talk">&#9679;</button>
-  </div>
-</div>
-
-<div class="notification-card" id="notification-card" style="display:none;" role="alert" aria-live="polite">
-  <span class="notification-card-text" id="notification-card-text"></span>
-  <div class="notification-card-actions">
-    <button class="btn" id="notif-view">View</button>
-    <button class="btn" id="notif-snooze">Snooze 7d</button>
-    <button class="btn" id="notif-dismiss">Dismiss</button>
-  </div>
-</div>
-
-<div class="messages" id="messages" role="log" aria-label="Chat messages" aria-live="polite"></div>
-
-<div class="input-area">
-  <div class="slash-menu" id="slash-menu" style="display:none;" role="listbox" aria-label="Commands"></div>
-  <div class="error-banner" id="error-banner" role="alert"></div>
-  <div class="notice-banner" id="notice-banner" role="status"></div>
-  <div class="attachment-chips" id="chips" aria-label="Attachments"></div>
-  <div class="input-wrap">
-    <textarea id="input" placeholder="Ask Yggdrasil\u2026 (Enter=send, Shift+Enter=newline, /=commands, @=attach file)" rows="1" aria-label="Chat input" aria-multiline="true"></textarea>
-    <div class="input-bar">
-      <button class="btn" id="attach-selection" title="Attach editor selection" aria-label="Attach editor selection">+sel</button>
-      <button class="btn" id="attach-file" title="Attach current file" aria-label="Attach current file">+file</button>
-      <span class="spacer"></span>
-      <span class="hint">Enter&#8629;</span>
-      <button class="btn primary" id="send" aria-label="Send message">Send</button>
-      <button class="btn danger" id="stop" style="display:none;" aria-label="Stop generation">Stop</button>
-    </div>
-  </div>
-</div>
-
-<div class="statusline" id="statusline" aria-live="polite">
-  <span class="statusline-mode" id="statusline-mode">IDLE</span>
-  <span class="statusline-sep">|</span>
-  <span class="statusline-model" id="statusline-model">-</span>
-  <span class="statusline-sep">|</span>
-  <span class="statusline-thread" id="statusline-thread">-</span>
-</div>
-
-<script nonce="${nonce}" src="${jsUri}"></script>
-${voiceEnabled ? `<script nonce="${nonce}" src="${voiceClientUri}"></script>` : ""}
-
+<body data-odin-url="${odinUrl}" data-voice-enabled="${voiceEnabled}" data-tts-enabled="${ttsEnabled}" data-voice-worklet-uri="${voiceWorkletUri}" data-voice-client-uri="${voiceClientUri}">
+<div id="root"></div>
+<script nonce="${nonce}" type="module" src="${chatJsUri}"></script>
 </body>
 </html>`;
   }
+}
+
+/**
+ * Resolve the hashed chat bundle from Vite's manifest. Falls back to a glob
+ * scan of `assets/chat.*.js` so the webview still loads when the manifest
+ * is absent (partial build). Throws if neither the manifest nor the assets
+ * directory exists — callers run `npm run build:webview` to fix.
+ */
+function resolveChatBundle(bundleRoot: string): { js: string; css?: string } {
+  const manifestPath = path.join(bundleRoot, ".vite", "manifest.json");
+  try {
+    const raw = fs.readFileSync(manifestPath, "utf-8");
+    const manifest = JSON.parse(raw) as Record<string, { file: string; css?: string[] }>;
+    // Vite keys the manifest by the entry-chunk source path.
+    const entry =
+      manifest["src/main.tsx"] ??
+      Object.values(manifest).find((e) => e.file?.startsWith("assets/chat."));
+    if (entry?.file) {
+      const css = entry.css?.find((c) => c.startsWith("assets/chat."));
+      return { js: entry.file, css };
+    }
+  } catch {
+    // Manifest missing or malformed — fall through to glob scan.
+  }
+
+  const assetsDir = path.join(bundleRoot, "assets");
+  if (!fs.existsSync(assetsDir)) {
+    throw new Error(
+      `Chat bundle not found at ${assetsDir}. Run \`npm run build:webview\` in the extension root.`,
+    );
+  }
+  const files = fs.readdirSync(assetsDir);
+  const js = files.find((f) => /^chat\..*\.js$/.test(f) && !f.endsWith(".chunk.js"));
+  const css = files.find((f) => /^chat\..*\.css$/.test(f));
+  if (!js) {
+    throw new Error(`Chat bundle JS missing in ${assetsDir}. Expected assets/chat.<hash>.js`);
+  }
+  return {
+    js: path.join("assets", js),
+    css: css ? path.join("assets", css) : undefined,
+  };
 }
 
 function getNonce(): string {

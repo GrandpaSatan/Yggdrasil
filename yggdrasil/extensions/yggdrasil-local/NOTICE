@@ -1,0 +1,42 @@
+Yggdrasil VS Code Extension
+Copyright (c) 2026 Jesus Hernandez
+
+This extension is licensed under the MIT License. See LICENSE.
+
+── Third-party components ──────────────────────────────────────────────
+
+This extension's chat webview (`webviews/chat-react/`) adapts code from:
+
+  Continue (continuedev/continue)
+  https://github.com/continuedev/continue
+  Licensed under Apache License, Version 2.0
+
+The Apache License 2.0 requires that we (a) retain copyright notices in
+adapted files, (b) list the ported files here, and (c) note that the
+adapted sources have been modified.
+
+Each adapted source file begins with a 5-line header:
+
+    // Adapted from continuedev/continue (Apache 2.0).
+    // Source: <original path in continuedev/continue>
+    // Commit: <SHA>
+    // Modifications: <summary>
+
+Files adapted in Sprint 068 (v0.15.0):
+
+  webviews/chat-react/src/theme/VscThemeProvider.tsx
+    ← gui/src/context/VscTheme.tsx (partial — propagates theme kind,
+      drops TextMate token colour extraction)
+
+  webviews/chat-react/src/hooks/useWebviewListener.ts
+    ← gui/src/hooks/useWebviewListener.ts (narrowed to our HostToWebview
+      union; otherwise structurally equivalent)
+
+Additional files will be added here as Phase 2 ports the TipTap editor,
+StyledMarkdownPreview, InputToolbar, AtMentionDropdown, and StepContainer
+components.
+
+── Full Apache License 2.0 text ────────────────────────────────────────
+
+The full text of the Apache License 2.0 is available at:
+  https://www.apache.org/licenses/LICENSE-2.0
