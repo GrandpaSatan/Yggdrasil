@@ -312,6 +312,11 @@ impl SessionStore {
         }
 
         if evicted > 0 {
+            // VULN-013 (Sprint 069 Phase C): expose session-eviction counter on /metrics
+            // so Prometheus scrapes can alert on unbounded session-store growth. The
+            // `reason` label distinguishes TTL reaps from LRU-at-capacity evictions.
+            metrics::counter!("session_evictions_total", "reason" => "ttl")
+                .increment(evicted as u64);
             tracing::debug!(evicted, remaining = self.sessions.len(), "session reaper cycle");
         }
     }
@@ -328,6 +333,9 @@ impl SessionStore {
 
             if let Some(key) = oldest {
                 self.sessions.remove(&key);
+                // VULN-013 (Sprint 069 Phase C): LRU-at-capacity eviction counter.
+                metrics::counter!("session_evictions_total", "reason" => "lru_capacity")
+                    .increment(1);
                 tracing::debug!(session_id = %key, "evicted oldest session (at capacity)");
             }
         }
