@@ -18,6 +18,11 @@
 
 import * as vscode from "vscode";
 import { OdinClient, type Flow } from "../api/odinClient";
+import { bucketForFlow } from "./flowsBucket";
+
+// Re-export so existing external consumers (extension.ts + tests) still
+// work after the pure helper moved into flowsBucket.ts.
+export { bucketForFlow };
 
 export type FlowNode =
   | { kind: "group"; label: string; isStatic: boolean; children: string[] }
@@ -25,21 +30,6 @@ export type FlowNode =
 
 const DEFAULT_REFRESH_SECS = 10;
 const MIN_REFRESH_SECS = 2;
-
-/**
- * Classify a flow name into a user-facing bucket. Deterministic and
- * pure — exported so unit tests can assert the mapping.
- */
-export function bucketForFlow(name: string): string {
-  const lower = name.toLowerCase();
-  if (lower.startsWith("coding_") || lower.includes("code_")) return "Coding";
-  if (lower.startsWith("memory_") || lower.includes("dream_") || lower.includes("saga"))
-    return "Memory";
-  if (lower.startsWith("ha_") || lower.includes("home_assistant")) return "Home Assistant";
-  if (lower.startsWith("research") || lower.includes("perceive")) return "Research";
-  if (lower.startsWith("voice_") || lower.includes("transcribe")) return "Voice";
-  return "Other";
-}
 
 /**
  * Pinned "Architecture" leaves — these are NOT flows Odin dispatches;

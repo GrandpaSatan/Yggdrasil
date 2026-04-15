@@ -89,10 +89,17 @@ def service_urls() -> dict[str, str]:
     return {
         "odin": os.environ.get("ODIN_URL", "http://10.0.65.8:8080"),
         "mimir": os.environ.get("MIMIR_URL", "http://10.0.65.8:9090"),
-        "muninn": os.environ.get("MUNINN_URL", "http://10.0.65.8:9091"),
+        # Muninn runs on Hugin (10.0.65.9:9091) per the Sprint 044b fleet
+        # layout — see MEMORY.md. A stale default of 10.0.65.8 was masking
+        # this; Sprint 068 Phase 8 discovered it via the Fergus E2E suite.
+        "muninn": os.environ.get("MUNINN_URL", "http://10.0.65.9:9091"),
         "voice": os.environ.get("HUGIN_VOICE_URL", "http://10.0.65.9:9098"),
         "mcp_http": os.environ.get("MCP_HTTP_URL", "http://10.0.65.8:9093"),
-        "dreamer": os.environ.get("DREAMER_URL", "http://10.0.65.8:9094"),
+        # ygg-dreamer binds to 0.0.0.0:9097 by default (see
+        # ygg-dreamer/src/config.rs:78-80 default_listen_addr). Sprint 066
+        # used a placeholder 9094; Sprint 068 Phase 7 verified the actual
+        # deployed port is 9097.
+        "dreamer": os.environ.get("DREAMER_URL", "http://10.0.65.8:9097"),
     }
 
 

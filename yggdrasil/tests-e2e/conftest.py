@@ -264,6 +264,12 @@ def mcp_client(urls: dict[str, str]) -> McpHttpClient:
     return McpHttpClient(urls["mcp_http"])
 
 
+@pytest.fixture(scope="session")
+def dreamer_url(urls: dict[str, str]) -> str:
+    """Base URL of ygg-dreamer's HTTP listener (/health, /status, /metrics)."""
+    return urls["dreamer"]
+
+
 # ───────────────────────── function-scoped fixtures ────────────────────────
 
 @pytest.fixture
