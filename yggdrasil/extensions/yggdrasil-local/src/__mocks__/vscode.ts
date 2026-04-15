@@ -62,7 +62,69 @@ export const window = {
   }),
   // Prompt — tests override this via `vi.spyOn(window, "showInputBox").mockResolvedValue("...")`.
   showInputBox: async (_opts?: unknown): Promise<string | undefined> => undefined,
+  // Sprint 069 Phase B — tests override via `vi.spyOn(window, "showQuickPick")`.
+  // Returns undefined by default (simulates user cancelling).
+  showQuickPick: async <T>(_items: T[] | Thenable<T[]>, _opts?: unknown): Promise<T | undefined> => undefined,
 };
+
+// ── Commands ─────────────────────────────────────────────────
+export const commands = {
+  // No-op by default. Tests spy via `vi.spyOn(commands, "executeCommand")`.
+  executeCommand: async <T = unknown>(_cmd: string, ..._args: unknown[]): Promise<T | undefined> => undefined,
+  registerCommand: (_cmd: string, _callback: (...args: unknown[]) => unknown): Disposable =>
+    new Disposable(() => {}),
+};
+
+// ── QuickPickItemKind ────────────────────────────────────────
+export const QuickPickItemKind = {
+  Separator: -1,
+  Default: 0,
+} as const;
+
+// ── ThemeIcon (used by tree providers — minimal stub) ────────
+export class ThemeIcon {
+  constructor(public id: string, public color?: ThemeColor) {}
+}
+export class ThemeColor {
+  constructor(public id: string) {}
+}
+
+// ── EventEmitter stub (TreeDataProvider uses it) ─────────────
+export class EventEmitter<T> {
+  private listeners: Array<(e: T) => void> = [];
+  get event() {
+    return (listener: (e: T) => void): Disposable => {
+      this.listeners.push(listener);
+      return new Disposable(() => {
+        this.listeners = this.listeners.filter((l) => l !== listener);
+      });
+    };
+  }
+  fire(e: T): void {
+    for (const l of this.listeners) l(e);
+  }
+  dispose(): void {
+    this.listeners = [];
+  }
+}
+
+// ── TreeItem / TreeItemCollapsibleState (minimal) ────────────
+export class TreeItem {
+  constructor(
+    public label: string,
+    public collapsibleState?: number,
+  ) {}
+  description?: string;
+  tooltip?: string | { value: string };
+  iconPath?: ThemeIcon | { fsPath: string };
+  contextValue?: string;
+  command?: { command: string; title: string; arguments?: unknown[] };
+}
+export const TreeItemCollapsibleState = {
+  None: 0,
+  Collapsed: 1,
+  Expanded: 2,
+} as const;
 
 // ── ConfigurationTarget ──────────────────────────────────────
 export const ConfigurationTarget = {
