@@ -22,9 +22,11 @@ services:
     ports:
       - "11438:80"
     volumes:
-      - /opt/yggdrasil/models/all-MiniLM-L6-v2:/data:ro
+      # HF cache: TEI downloads sentence-transformers/all-MiniLM-L6-v2 (90 MB)
+      # on first start; subsequent starts read from this volume.
+      - /opt/yggdrasil/cache/tei:/data
     command:
-      - --model-id=/data
+      - --model-id=sentence-transformers/all-MiniLM-L6-v2
       - --port=80
       - --max-batch-tokens=16384
       - --max-concurrent-requests=256
