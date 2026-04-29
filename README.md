@@ -180,13 +180,13 @@ This project is licensed under the [Business Source License 1.1](LICENSE).
 
 ## Support the Project
 
-Yggdrasil is built nights and weekends by a solo developer who would love nothing more than to work on this full-time. If you find it useful, consider supporting development:
+Yggdrasil is built nights and weekends by a solo developer.
 
 - [GitHub Sponsors] COMING SOON
 - [Buy Me a Coffee](https://buymeacoffee.com/jourgoundd)
 - [Ko-fi]COMING SOON
 
-Every contribution -- no matter how small -- gets me one step closer to making this my day job. Thank you.
+Every contribution.
 
 ## Contributing
 
